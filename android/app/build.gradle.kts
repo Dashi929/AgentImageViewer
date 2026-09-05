@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.dashi929.agent_image_viewer"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

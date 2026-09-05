@@ -3,6 +3,8 @@ library;
 
 import 'dart:io';
 
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -38,6 +40,8 @@ class AppState extends ChangeNotifier {
       library: library,
       images: ImageManager(thumbCacheDir: thumbs),
     );
+    // 启动时后台重扫监控目录（文件增删、跨会话变化）
+    unawaited(state.rescan());
     return state;
   }
 
@@ -52,6 +56,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> rescan() async {
     await library.rescan();
+    notifyListeners(); // 后台重扫完成后刷新图库 UI
   }
 
   /// 共享 JsonStore（编辑栈等持久化用）。

@@ -13,7 +13,7 @@ import 'package:window_manager/window_manager.dart';
 
 import '../../app_state.dart';
 import '../../core/image/exif.dart';
-import '../../core/image/image_manager.dart' show DecodedImage;
+import '../../core/image/image_manager.dart';
 import '../../core/scanner.dart';
 import '../../core/viewer/viewer_state.dart';
 import '../../platform/trash.dart';
@@ -53,7 +53,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _openCurrent();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _openCurrent());
     _armHideTimer();
   }
 
@@ -91,9 +91,8 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
 
     // 两段式：先屏幕尺寸解码立即呈现，未命中时再换入全量（设计书 2.2）
     final vp = _view.viewportW > 0 ? _view.viewportW : 1200;
-    final previewTarget = (vp * MediaQuery.devicePixelRatioOf(context))
-        .clamp(320, 2048)
-        .toInt();
+    final dpr = View.of(context).devicePixelRatio;
+    final previewTarget = (vp * dpr).clamp(320, 2048).toInt();
     final preview = await _app.images.decode(e.path, e.mtimeMs, target: previewTarget);
     if (_entry.path != e.path) return;
     _applyDecoded(preview);
@@ -106,6 +105,8 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
       _view.resetForImage(full.width, full.height, _view.viewportW, _view.viewportH);
       setState(() {});
       unawaited(_maybeAnimate(e));
+      _prefetchNeighbors();
+      WidgetsBinding.instance.addPostFrameCallback((_) => _ensureStripVisible());
     }
   }
 
@@ -184,10 +185,49 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
 
   // 手势滑动累计（适应态翻页/返回判定）
   Offset _swipeAccum = Offset.zero;
+  final ScrollController _stripController = ScrollController();
+
+  /// 打开新图后把缩略图条滚动到当前项可见。
+  void _ensureStripVisible() {
+    if (!_stripController.hasClients) return;
+    const itemW = 82.0; // 76 + 6 间距
+    final target = _nav.index * itemW;
+    final vp = _stripController.position.viewportDimension;
+    final cur = _stripController.offset;
+    if (target < cur || target + itemW > cur + vp) {
+      _stripController.animateTo(
+        (target - vp / 2 + itemW / 2)
+            .clamp(0.0, _stripController.position.maxScrollExtent),
+        duration: AppTheme.motionDuration,
+        curve: AppTheme.curve,
+      );
+    }
+  }
 
   void _navigate(bool forward) {
     final moved = forward ? _nav.next() : _nav.previous();
     if (moved) _openCurrent();
+  }
+
+  Future<void> _safePrefetch(String path, int mtimeMs, int target) async {
+    try {
+      await _app.images.decode(path, mtimeMs, target: target);
+    } catch (_) {/* 预解码失败不影响浏览 */}
+  }
+
+  /// 预解码前后各 5 张（target=屏幕尺寸级），翻页命中缓存即秒切。
+  void _prefetchNeighbors() {
+    const radius = 5;
+    final vp = (_view.viewportW > 0 ? _view.viewportW : 1200).round();
+    final target = (vp * View.of(context).devicePixelRatio).clamp(320, 2048).toInt();
+    for (var d = 1; d <= radius; d++) {
+      for (final i in [_nav.index - d, _nav.index + d]) {
+        if (i < 0 || i >= widget.list.length) continue;
+        final e = widget.list[i];
+        if (e.path == _entry.path) continue;
+        unawaited(_safePrefetch(e.path, e.mtimeMs, target));
+      }
+    }
   }
 
   void _toggleFullscreen() async {
@@ -201,6 +241,31 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     _hideTimer = Timer(const Duration(seconds: 2), () {
       if (mounted) setState(() => _controlsVisible = false);
     });
+  }
+
+  DateTime? _lastTapAt;
+  Offset? _lastTapPos;
+
+  /// 自实现双击：适应窗口 ↔ 100% 实际像素（设计书 表 5-1）。
+  /// 不用 GestureDetector.onDoubleTap——它会与 scale 手势产生 arena 竞争而失效。
+  void _handleTapUp(PointerUpEvent e) {
+    final now = DateTime.now();
+    final pos = e.localPosition;
+    final isDouble = _lastTapAt != null &&
+        now.difference(_lastTapAt!) < const Duration(milliseconds: 320) &&
+        _lastTapPos != null &&
+        (pos - _lastTapPos!).distance < 48;
+    _lastTapAt = isDouble ? null : now;
+    _lastTapPos = pos;
+    if (!isDouble) return;
+    if (_view.isAtFit) {
+      _view.actualSize();
+      _showOsd('100%');
+    } else {
+      _view.fitWindow();
+      _showOsd('适应窗口');
+    }
+    setState(() {});
   }
 
   void _wakeControls() {
@@ -297,6 +362,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
                         children: [
                           _canvas(),
                           ..._overlays(),
+                          _thumbStrip(),
                         ],
                       ),
                     ),
@@ -320,6 +386,10 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
           child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accent));
     }
     return Listener(
+      behavior: HitTestBehavior.opaque, // 画布整面可命中（含图像外黑边）
+      onPointerDown: (_) => _wakeControls(), // 触屏：触摸即唤醒控件（设计书 4.2）
+      onPointerMove: (_) => _wakeControls(),
+      onPointerUp: _handleTapUp,
       onPointerSignal: (s) {
         if (s is PointerScrollEvent) {
           final factor = math.exp(-s.scrollDelta.dy * 0.0015);
@@ -327,16 +397,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
         }
       },
       child: GestureDetector(
-        onDoubleTap: () {
-          if (_view.isAtFit) {
-            _view.actualSize();
-            _showOsd('100%');
-          } else {
-            _view.fitWindow();
-            _showOsd('适应窗口');
-          }
-          setState(() {});
-        },
+        behavior: HitTestBehavior.opaque, // 整面手势区（翻页/上滑返回不限于图像像素）
         // 统一缩放手势：双指捏合以双指中心为锚点；单指拖拽平移（设计书 表 5-2）
         onScaleStart: (d) => _swipeAccum = Offset.zero,
         onScaleUpdate: (d) {
@@ -462,8 +523,9 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
         color: AppColors.overlay.withValues(alpha: 0.92),
         borderRadius: BorderRadius.circular(10),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           _barBtn(Icons.zoom_out, '缩小 (-)', () => _zoom(0.8)),
@@ -498,6 +560,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
           ),
         ],
       ),
+      ),
     );
   }
 
@@ -509,6 +572,59 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
       },
       icon: Icon(icon, size: 20, color: AppColors.textPrimary),
       tooltip: tip,
+    );
+  }
+
+  // ---------- 缩略图预览条 ----------
+
+  Widget _thumbStrip() {
+    if (widget.list.length <= 1) return const SizedBox.shrink();
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 84,
+      child: AnimatedOpacity(
+        opacity: _controlsVisible ? 1 : 0,
+        duration: AppTheme.motionDuration,
+        curve: AppTheme.curve,
+        child: IgnorePointer(
+          ignoring: !_controlsVisible,
+          child: SizedBox(
+            height: 76,
+            child: ListView.builder(
+              controller: _stripController,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              scrollDirection: Axis.horizontal,
+              itemCount: widget.list.length,
+              itemBuilder: (context, i) {
+                final e = widget.list[i];
+                final selected = i == _nav.index;
+                return GestureDetector(
+                  onTap: () {
+                    _nav.index = i;
+                    _openCurrent();
+                  },
+                  child: Container(
+                    width: 76,
+                    margin: const EdgeInsets.only(right: 6),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: selected ? AppColors.accent : Colors.white24,
+                        width: selected ? 2 : 1,
+                      ),
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(5),
+                      child: _StripThumb(entry: e),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
     );
   }
 
@@ -576,5 +692,58 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
         ],
       ),
     );
+  }
+}
+
+/// 缩略图条单元：160px 磁盘缓存缩略图。
+class _StripThumb extends StatefulWidget {
+  const _StripThumb({required this.entry});
+
+  final ImageEntry entry;
+
+  @override
+  State<_StripThumb> createState() => _StripThumbState();
+}
+
+class _StripThumbState extends State<_StripThumb> {
+  ImageManager? _mgr;
+  String? _pinnedKey;
+  ui.Image? _image;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final app = AppStateScope.of(context, listen: false);
+    _mgr = app.images;
+    try {
+      final d =
+          await app.images.decode(widget.entry.path, widget.entry.mtimeMs, target: 160);
+      if (mounted) {
+        app.images.pin(d.cacheKey);
+        _pinnedKey = d.cacheKey;
+        setState(() => _image = d.image);
+      }
+    } catch (_) {/* 坏图保持空态 */}
+  }
+
+  @override
+  void dispose() {
+    final k = _pinnedKey;
+    if (k != null) _mgr?.unpin(k);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final img = _image;
+    if (img == null) {
+      return const ColoredBox(color: Color(0xFF23272F));
+    }
+    return RawImage(
+        image: img, fit: BoxFit.contain, width: double.infinity, height: double.infinity);
   }
 }

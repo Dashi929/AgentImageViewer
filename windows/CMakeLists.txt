@@ -2,6 +2,10 @@
 cmake_minimum_required(VERSION 3.14)
 project(agent_image_viewer LANGUAGES CXX)
 
+# permission_handler_windows 使用了 MSVC 弃用的 /await 实验性协程选项，
+# 新版 MSVC(14.51+) 默认报错，需显式抑制。
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
 set(BINARY_NAME "agent_image_viewer")

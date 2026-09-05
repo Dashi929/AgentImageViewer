@@ -138,7 +138,12 @@ Future<List<ImageEntry>> scanDirectory(String dirPath, {int depth = 4}) async {
     List<FileSystemEntity> children;
     try {
       children = await dir.list(followLinks: false).toList();
-    } catch (_) {
+    } catch (e) {
+      assert(() {
+        // ignore: avoid_print
+        print('[scanner] list failed: ${dir.path} -> $e');
+        return true;
+      }());
       return; // 无权限等 IO 异常：跳过该目录
     }
     for (final e in children) {
@@ -162,6 +167,11 @@ Future<List<ImageEntry>> scanDirectory(String dirPath, {int depth = 4}) async {
   }
 
   await walk(root, 0);
+  assert(() {
+    // ignore: avoid_print
+    print('[scanner] scanned ${root.path}: ${out.length} entries');
+    return true;
+  }());
   out.sort((a, b) => naturalCompare(a.name, b.name));
   return out;
 }

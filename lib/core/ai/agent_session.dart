@@ -185,6 +185,11 @@ class AgentSession {
       return AgentToolResult.ok('生成式改图（$instruction）需要先在「设置 → AI 设置」配置图像编辑模型。');
     }
 
+    // 出确认卡前先校验目标：不让用户确认一个注定失败的操作
+    if (!File(path).existsSync()) {
+      return AgentToolResult.error('生成式改图失败：文件不存在（$path）。请确认图片路径。');
+    }
+
     return AgentToolResult.confirm(PendingAction(
       toolName: 'ai_edit_generative',
       summary: '生成式改图需要把「$path」上传到 ${gen.config.baseUrl} '
