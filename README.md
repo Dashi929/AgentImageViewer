@@ -36,7 +36,7 @@ CI：`.github/workflows/ci.yml`（analyze + test，Ubuntu/Windows 双矩阵）�
 
 | 版本 | 范围 | 状态 |
 |---|---|---|
-| v0.1 MVP | Windows：浏览 + 编辑 + 图库 | 开发中（S0–S2） |
+| v0.1 MVP | Windows：浏览 + 编辑 + 图库 + 设置 | ✅ 已发布（tag v0.1.0，dist/ 有便携包） |
 | v0.2 | AI Agent | 未开始 |
 | v0.3 | Linux + 系统集成 | 未开始 |
 | v0.4 | 移动端 | 未开始 |

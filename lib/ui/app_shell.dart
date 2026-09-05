@@ -10,6 +10,7 @@ import 'editor/editor_page.dart';
 import 'gallery/gallery_page.dart';
 import 'gallery/tags_page.dart';
 import 'theme.dart';
+import 'settings/settings_page.dart';
 import 'viewer/viewer_page.dart';
 
 class AppShell extends StatelessWidget {
@@ -60,7 +61,7 @@ class AppShell extends StatelessWidget {
         NavTab.gallery => const GalleryPage(),
         NavTab.tags => const TagsPage(),
         NavTab.ai => const _Placeholder('AI 助手 — S4 落地'),
-        NavTab.settings => const _Placeholder('设置 — S3 落地'),
+        NavTab.settings => const SettingsPage(),
       };
 }
 
