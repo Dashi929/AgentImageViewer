@@ -6,6 +6,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../../app_state.dart';
+import 'ai/ai_panel.dart';
 import 'editor/editor_page.dart';
 import 'gallery/gallery_page.dart';
 import 'gallery/tags_page.dart';
@@ -60,7 +61,7 @@ class AppShell extends StatelessWidget {
   Widget _pageFor(NavTab tab) => switch (tab) {
         NavTab.gallery => const GalleryPage(),
         NavTab.tags => const TagsPage(),
-        NavTab.ai => const _Placeholder('AI 助手 — S4 落地'),
+        NavTab.ai => const AiPanel(),
         NavTab.settings => const SettingsPage(),
       };
 }
@@ -143,14 +144,3 @@ class _NavItem extends StatelessWidget {
   }
 }
 
-class _Placeholder extends StatelessWidget {
-  const _Placeholder(this.text);
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Text(text, style: const TextStyle(color: AppColors.textSecondary)),
-    );
-  }
-}
