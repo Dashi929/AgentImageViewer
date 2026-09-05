@@ -16,6 +16,7 @@ import '../../core/image/exif.dart';
 import '../../core/image/image_manager.dart' show DecodedImage;
 import '../../core/scanner.dart';
 import '../../core/viewer/viewer_state.dart';
+import '../../platform/trash.dart';
 import '../theme.dart';
 
 class ViewerPage extends StatefulWidget {
@@ -117,6 +118,26 @@ class _ViewerPageState extends State<ViewerPage> {
     _displayImage = info.image;
     setState(() {});
     _animTimer = Timer(info.duration, () => _playNextFrame());
+  }
+
+  Future<void> _deleteCurrent() async {
+    final path = _entry.path;
+    final ok = await moveToRecycleBin(path);
+    if (!mounted) return;
+    if (ok) {
+      await _app.library.rescan();
+      _showOsd('已移入回收站');
+      // 从当前列表移除；若空则回图库
+      widget.list.removeWhere((e) => e.path == path);
+      if (widget.list.isEmpty) {
+        NavigatorStateEx.closeViewer();
+      } else if (_nav.index >= widget.list.length) {
+        _nav.last();
+        _openCurrent();
+      }
+    } else {
+      _showOsd('移入回收站失败');
+    }
   }
 
   void _toggleAnimPause() {
@@ -230,6 +251,7 @@ class _ViewerPageState extends State<ViewerPage> {
         const SingleActivator(LogicalKeyboardKey.keyI): _toggleInfo,
         const SingleActivator(LogicalKeyboardKey.keyE, control: true): () =>
             NavigatorStateEx.editor.value = _entry,
+        const SingleActivator(LogicalKeyboardKey.delete): _deleteCurrent,
       },
       child: Focus(
         autofocus: true,

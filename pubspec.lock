@@ -97,6 +97,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "2.2.0"
+  ffi_leak_tracker:
+    dependency: transitive
+    description:
+      name: ffi_leak_tracker
+      sha256: "4093d4ef9ca06ffe2786e73bfb25e22aa92112b9bb4ec941f11e3e6b61489a97"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "0.1.2"
   flutter:
     dependency: "direct main"
     description: flutter
@@ -456,6 +464,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "15.3.0"
+  win32:
+    dependency: transitive
+    description:
+      name: win32
+      sha256: a0b93865d5644f11cf6a8c3f6db909f1ec168958b5805f6cc684adea957cd63d
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "6.4.0"
   window_manager:
     dependency: "direct main"
     description:
@@ -464,6 +480,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "0.5.2"
+  windows_single_instance:
+    dependency: "direct main"
+    description:
+      name: windows_single_instance
+      sha256: "8f464db5121d7e12ce8323ef170adc76ad18678057b63b1218932fe17db05642"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.2.0"
   xdg_directories:
     dependency: transitive
     description:

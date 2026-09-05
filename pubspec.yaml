@@ -37,6 +37,7 @@ dependencies:
   window_manager: ^0.5.1
   path_provider: ^2.1.5
   image: ^4.9.2
+  windows_single_instance: ^1.2.0
 
 dev_dependencies:
   flutter_test:

@@ -57,6 +57,23 @@ class AppState extends ChangeNotifier {
   /// 共享 JsonStore（编辑栈等持久化用）。
   JsonStore get store => library.store;
 
+  /// 外部双击打开的图片：登记进图库并直接进入浏览（设计书 6.1）。
+  Future<void> registerExternalOpen(String path) async {
+    if (!File(path).existsSync()) return;
+    final st = await File(path).stat();
+    library.upsert(ImageEntry(
+      path: path,
+      name: path.split(Platform.pathSeparator).last,
+      sizeBytes: st.size,
+      mtimeMs: st.modified.millisecondsSinceEpoch,
+    ));
+    await library.flush();
+    final entry = library.entryAt(path);
+    if (entry != null) {
+      NavigatorStateEx.openViewer([entry], 0);
+    }
+  }
+
   /// 标签页 → 图库的搜索词传递。
   final pendingSearch = ValueNotifier<String>('');
   void pendGallerySearch(String q) => pendingSearch.value = q;

@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import '../../app_state.dart';
 import '../../core/image/image_manager.dart';
 import '../../core/scanner.dart';
+import '../../platform/trash.dart';
 import '../theme.dart';
 
 class GalleryPage extends StatefulWidget {
@@ -195,6 +196,15 @@ class _ThumbCardState extends State<_ThumbCard> {
   ImageManager? _mgr;
   String? _pinnedKey;
 
+  void _osd(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(msg, style: const TextStyle(fontSize: 13))));
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -340,8 +350,7 @@ class _ThumbCardState extends State<_ThumbCard> {
         const PopupMenuDivider(),
         const PopupMenuItem(value: 'copyPath', child: Text('复制文件路径')),
         const PopupMenuItem(value: 'reveal', child: Text('显示所在文件夹')),
-        const PopupMenuItem(
-            value: 'trash', enabled: false, child: Text('移入回收站（S5）')),
+        const PopupMenuItem(value: 'trash', child: Text('移入回收站')),
         const PopupMenuDivider(),
         const PopupMenuItem(value: 'props', child: Text('属性')),
       ],
@@ -401,6 +410,15 @@ class _ThumbCardState extends State<_ThumbCard> {
           }
         case 'copyPath':
           await Clipboard.setData(ClipboardData(text: e.path));
+        case 'trash':
+          final ok = await moveToRecycleBin(e.path);
+          if (ok) {
+            await app.library.rescan();
+            app.refreshGallery();
+            if (context.mounted) _osd('已移入回收站');
+          } else {
+            if (context.mounted) _osd('移入回收站失败');
+          }
         case 'reveal':
           if (Platform.isWindows) {
             Process.run('explorer.exe', ['/select,', e.path]);

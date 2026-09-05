@@ -1,9 +1,11 @@
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
+import 'package:windows_single_instance/windows_single_instance.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
+import 'core/scanner.dart';
 import 'ui/app_shell.dart';
 import 'ui/theme.dart';
 
@@ -25,6 +27,19 @@ Future<void> main() async {
   }
 
   final state = await AppState.create();
+  if (!Platform.isAndroid && !Platform.isIOS) {
+    // 单实例锁：再次双击图片时把路径转发给已开窗口（设计书 6.1）
+    await WindowsSingleInstance.ensureSingleInstance(
+      const [],
+      'com.dashi929.agent_image_viewer',
+      onSecondWindow: (args) {
+        final path = extractImagePath(args);
+        if (path != null) {
+          state.registerExternalOpen(path);
+        }
+      },
+    );
+  }
   runApp(AgentImageViewerApp(state: state));
 }
 
@@ -51,6 +66,15 @@ class AgentImageViewerApp extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 从进程参数中提取图片路径（跳过 exe 自身与选项）。
+String? extractImagePath(List<String> args) {
+  for (final a in args) {
+    if (a.endsWith('.exe') || a.startsWith('-') || a.startsWith('/')) continue;
+    if (SupportedFormats.isSupported(a)) return a;
+  }
+  return null;
 }
 
 class _TitleBar extends StatelessWidget {

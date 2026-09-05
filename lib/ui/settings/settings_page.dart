@@ -3,8 +3,11 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'dart:io' show Platform;
+
 import '../../app_state.dart';
 import '../../core/db/settings.dart';
+import '../../platform/file_assoc.dart';
 import '../theme.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -16,6 +19,15 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   Settings? _settings;
+  bool _assocEnabled = false;
+
+  void _showResult(String msg) {
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(msg, style: const TextStyle(fontSize: 13))));
+  }
 
   @override
   void initState() {
@@ -57,13 +69,30 @@ class _SettingsPageState extends State<SettingsPage> {
           _dropdown('解码缓存上限', '${s.cacheMB} MB', const ['256 MB', '512 MB', '1024 MB'],
               (v) => s.cacheMB = int.parse(v.split(' ').first)),
         ]),
-        _group('系统', '文件关联、托盘、开机启动将在 v0.3（桌面双端里程碑）提供。', [
-          const ListTile(
-            enabled: false,
-            leading: Icon(Icons.link, size: 20),
-            title: Text('文件关联注册', style: TextStyle(fontSize: 14)),
-            subtitle: Text('v0.3 提供', style: TextStyle(fontSize: 12)),
-          ),
+        _group('系统', '文件关联写入当前用户注册表（HKCU），无需管理员权限。', [
+          if (!Platform.isAndroid && !Platform.isIOS) ...[
+            SwitchListTile(
+              value: _assocEnabled,
+              onChanged: (v) async {
+                final assoc = FileAssoc(
+                  exeName: 'AgentImageViewer',
+                  exePath: Platform.resolvedExecutable,
+                  iconPath: Platform.resolvedExecutable,
+                );
+                final ok = v
+                    ? await assoc.register(defaultAssocExtensions)
+                    : await assoc.unregister(defaultAssocExtensions);
+                if (mounted) {
+                  setState(() => _assocEnabled = v && ok);
+                  _showResult(ok ? '文件关联已${v ? '注册' : '取消'}' : '操作失败，请重试');
+                }
+              },
+              title: const Text('设为以下格式的默认打开方式',
+                  style: TextStyle(fontSize: 14)),
+              subtitle: const Text('jpg jpeg png gif webp bmp avif',
+                  style: TextStyle(fontSize: 12)),
+            ),
+          ],
           const ListTile(
             enabled: false,
             leading: Icon(Icons.shield_outlined, size: 20),
