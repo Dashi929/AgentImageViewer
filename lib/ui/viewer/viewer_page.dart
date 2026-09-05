@@ -228,6 +228,8 @@ class _ViewerPageState extends State<ViewerPage> {
         },
         const SingleActivator(LogicalKeyboardKey.space): _toggleAnimPause,
         const SingleActivator(LogicalKeyboardKey.keyI): _toggleInfo,
+        const SingleActivator(LogicalKeyboardKey.keyE, control: true): () =>
+            NavigatorStateEx.editor.value = _entry,
       },
       child: Focus(
         autofocus: true,
@@ -410,6 +412,9 @@ class _ViewerPageState extends State<ViewerPage> {
           _barBtn(Icons.rotate_right, '旋转', () {
             _displayRotateTurns = (_displayRotateTurns + 1) % 4;
             setState(() {});
+          }),
+          _barBtn(Icons.edit_outlined, '编辑 (Ctrl+E)', () {
+            NavigatorStateEx.editor.value = _entry;
           }),
           _barBtn(Icons.info_outline, '信息 (I)', _toggleInfo),
           const VerticalDivider(width: 12, indent: 12, endIndent: 12),

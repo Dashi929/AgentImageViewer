@@ -1,10 +1,11 @@
 /// 图库视图（设计书 4.3.1）：顶部工具栏 + 元信息行 + 缩略图网格。
 library;
 
-import 'dart:io' show Directory;
+import 'dart:io' show Directory, Platform, Process;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app_state.dart';
 import '../../core/image/image_manager.dart';
@@ -89,6 +90,7 @@ class _GalleryPageState extends State<GalleryPage> {
                   ),
                   itemCount: entries.length,
                   itemBuilder: (context, i) => _ThumbCard(
+                    key: ValueKey(entries[i].path),
                     entry: entries[i],
                     onOpen: () => NavigatorStateEx.openViewer(entries, i),
                   ),
@@ -99,13 +101,8 @@ class _GalleryPageState extends State<GalleryPage> {
   }
 
   List<ImageEntry> _filter(List<ImageEntry> list) {
-    final q = _query.trim();
-    if (q.isEmpty) return list;
-    final terms = q.toLowerCase().split(RegExp(r'\s+'));
-    return list.where((e) {
-      final hay = '${e.name} ${e.path}'.toLowerCase();
-      return terms.every(hay.contains);
-    }).toList();
+    final state = AppStateScope.of(context);
+    return state.library.search(_query);
   }
 
   Future<String?> _pickFolder() async {
@@ -184,7 +181,7 @@ class _Toolbar extends StatelessWidget {
 }
 
 class _ThumbCard extends StatefulWidget {
-  const _ThumbCard({required this.entry, required this.onOpen});
+  const _ThumbCard({super.key, required this.entry, required this.onOpen});
 
   final ImageEntry entry;
   final VoidCallback onOpen;
@@ -238,11 +235,15 @@ class _ThumbCardState extends State<_ThumbCard> {
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: widget.onOpen,
+        onSecondaryTapUp: (d) => _showContextMenu(context, d.globalPosition),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(
-              child: FutureBuilder<_ThumbData>(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  FutureBuilder<_ThumbData>(
                 future: _future,
                 builder: (context, snap) {
                   if (snap.hasError) {
@@ -274,22 +275,161 @@ class _ThumbCardState extends State<_ThumbCard> {
                       height: d.h.toDouble(),
                     ),
                   );
-                },
+                  },
+                ),
+                if (widget.entry.favorite)
+                  const Positioned(
+                    top: 6,
+                    right: 6,
+                    child: Icon(Icons.star, size: 16, color: Colors.amber),
+                  ),
+                ],
               ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
-              child: Text(
-                widget.entry.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12, color: AppColors.textPrimary),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      widget.entry.displayName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12, color: AppColors.textPrimary),
+                    ),
+                  ),
+                  for (final tag in widget.entry.tags.take(2))
+                    Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: Text(
+                        tag,
+                        style: const TextStyle(
+                            fontSize: 10,
+                            color: AppColors.aiAccent,
+                            backgroundColor: Color(0x1A8B7CF6)),
+                      ),
+                    ),
+                ],
               ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  /// 右键菜单（设计书 5.4 表 5-4；移动端长按复用，隐藏桌面专属项）
+  void _showContextMenu(BuildContext context, Offset pos) {
+    final app = AppStateScope.of(context, listen: false);
+    final e = widget.entry;
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(pos.dx, pos.dy, pos.dx + 1, pos.dy + 1),
+      items: [
+        const PopupMenuItem(value: 'open', child: Text('打开')),
+        const PopupMenuItem(value: 'edit', child: Text('编辑')),
+        const PopupMenuItem(value: 'ai', enabled: false, child: Text('AI 识别此图')),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          value: 'fav',
+          child: Text(e.favorite ? '取消收藏' : '设为收藏'),
+        ),
+        const PopupMenuItem(value: 'rename', child: Text('虚拟重命名 (F2)')),
+        const PopupMenuItem(value: 'tag', child: Text('添加标签')),
+        const PopupMenuDivider(),
+        const PopupMenuItem(value: 'copyPath', child: Text('复制文件路径')),
+        const PopupMenuItem(value: 'reveal', child: Text('显示所在文件夹')),
+        const PopupMenuItem(
+            value: 'trash', enabled: false, child: Text('移入回收站（S5）')),
+        const PopupMenuDivider(),
+        const PopupMenuItem(value: 'props', child: Text('属性')),
+      ],
+    ).then((action) async {
+      if (action == null) return;
+      switch (action) {
+        case 'open':
+          widget.onOpen();
+        case 'edit':
+          NavigatorStateEx.editor.value = e;
+        case 'fav':
+          app.library.toggleFavorite(e.path);
+          await app.library.flush();
+        case 'rename':
+          if (!context.mounted) return;
+          final ctrl = TextEditingController(text: e.virtualName ?? e.name);
+          final name = await showDialog<String>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('虚拟重命名（不修改真实文件）'),
+              content: TextField(controller: ctrl, autofocus: true),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('取消')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(context, ctrl.text),
+                    child: const Text('确定')),
+              ],
+            ),
+          );
+          if (name != null) {
+            app.library.setVirtualName(e.path, name.isEmpty ? null : name);
+            await app.library.flush();
+          }
+        case 'tag':
+          if (!context.mounted) return;
+          final ctrl = TextEditingController();
+          final tag = await showDialog<String>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('添加标签'),
+              content: TextField(controller: ctrl, autofocus: true),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('取消')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(context, ctrl.text),
+                    child: const Text('添加')),
+              ],
+            ),
+          );
+          if (tag != null && tag.isNotEmpty) {
+            app.library.addTag(e.path, tag);
+            await app.library.flush();
+          }
+        case 'copyPath':
+          await Clipboard.setData(ClipboardData(text: e.path));
+        case 'reveal':
+          if (Platform.isWindows) {
+            Process.run('explorer.exe', ['/select,', e.path]);
+          } else if (Platform.isLinux) {
+            Process.run('xdg-open',
+                [e.path.substring(0, e.path.lastIndexOf('/'))]);
+          }
+        case 'props':
+          if (!context.mounted) return;
+          showDialog<void>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: Text(e.displayName),
+              content: Text(
+                  '路径：${e.path}\n'
+                  '尺寸：${e.width ?? '?'}×${e.height ?? '?'}\n'
+                  '大小：${(e.sizeBytes / 1024).toStringAsFixed(0)} KB\n'
+                  '标签：${e.tags.join('、')}\n'
+                  '分类：${e.category ?? '-'}'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('关闭')),
+              ],
+            ),
+          );
+      }
+      app.refreshGallery();
+    });
   }
 }
 

@@ -10,6 +10,9 @@ class LibraryIndex {
   LibraryIndex(this._store);
 
   final JsonStore _store;
+
+  /// 底层 JSON 存储（编辑栈等共用同一数据目录）。
+  JsonStore get store => _store;
   final Map<String, ImageEntry> _byPath = {};
   final List<String> _folders = [];
   bool _loaded = false;
@@ -83,6 +86,61 @@ class LibraryIndex {
     }
     await flush();
     return entries;
+  }
+
+  // ---------- 虚拟操作（与 AI 共用同一套记录，设计书 2.5） ----------
+
+  void toggleFavorite(String path) {
+    final e = _byPath[path];
+    if (e != null) {
+      e.favorite = !e.favorite;
+      _dirty = true;
+    }
+  }
+
+  void addTag(String path, String tag) {
+    final e = _byPath[path];
+    if (e != null && tag.isNotEmpty && !e.tags.contains(tag)) {
+      e.tags.add(tag);
+      _dirty = true;
+    }
+  }
+
+  void removeTag(String path, String tag) {
+    _byPath[path]?.tags.remove(tag);
+    _dirty = true;
+  }
+
+  void setVirtualName(String path, String? name) {
+    _byPath[path]?.virtualName = name;
+    _dirty = true;
+  }
+
+  void setCategory(String path, String? category) {
+    _byPath[path]?.category = category;
+    _dirty = true;
+  }
+
+  /// 全部标签（标签页导航用）。
+  List<String> get allTags {
+    final s = <String>{};
+    for (final e in _byPath.values) {
+      s.addAll(e.tags);
+    }
+    final list = s.toList()..sort(naturalCompare);
+    return list;
+  }
+
+  /// 多条件搜索：空格分隔，文件名/虚拟名/标签/文件夹均可命中。
+  List<ImageEntry> search(String query) {
+    final q = query.trim();
+    if (q.isEmpty) return entries;
+    final terms = q.toLowerCase().split(RegExp(r'\s+'));
+    return entries.where((e) {
+      final hay =
+          '${e.name} ${e.displayName} ${e.tags.join(' ')} ${e.path}'.toLowerCase();
+      return terms.every(hay.contains);
+    }).toList();
   }
 
   /// 只写盘，dirty 时才真正 IO。

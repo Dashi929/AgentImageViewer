@@ -71,7 +71,7 @@ int naturalCompare(String a, String b) {
 int _lower(int c) => (c >= 0x41 && c <= 0x5A) ? c + 0x20 : c;
 bool _isDigit(int c) => c >= 0x30 && c <= 0x39;
 
-/// 一张图的最小索引条目。
+/// 一张图的索引条目。标签/收藏/分类/虚拟重命名均为虚拟操作，只写本地库。
 class ImageEntry {
   ImageEntry({
     required this.path,
@@ -80,13 +80,25 @@ class ImageEntry {
     required this.mtimeMs,
     this.width,
     this.height,
-  });
+    List<String>? tags,
+    this.favorite = false,
+    this.category,
+    this.virtualName,
+  }) : tags = List.of(tags ?? const []);
 
   final String path;
   final String name;
   final int sizeBytes;
   final int mtimeMs;
   int? width, height;
+  final List<String> tags;
+  bool favorite;
+  String? category;
+
+  /// 虚拟重命名的显示名（不修改真实文件）。
+  String? virtualName;
+
+  String get displayName => (virtualName?.isNotEmpty ?? false) ? virtualName! : name;
 
   Map<String, Object?> toJson() => {
         'path': path,
@@ -95,6 +107,10 @@ class ImageEntry {
         'mtime': mtimeMs,
         if (width != null) 'w': width,
         if (height != null) 'h': height,
+        if (tags.isNotEmpty) 'tags': tags,
+        if (favorite) 'fav': true,
+        if (category != null) 'cat': category,
+        if (virtualName != null) 'vname': virtualName,
       };
 
   static ImageEntry fromJson(Map<String, Object?> j) => ImageEntry(
@@ -104,6 +120,10 @@ class ImageEntry {
         mtimeMs: (j['mtime'] as num).toInt(),
         width: (j['w'] as num?)?.toInt(),
         height: (j['h'] as num?)?.toInt(),
+        tags: (j['tags'] as List?)?.cast<String>(),
+        favorite: j['fav'] as bool? ?? false,
+        category: j['cat'] as String?,
+        virtualName: j['vname'] as String?,
       );
 }
 

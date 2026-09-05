@@ -6,7 +6,9 @@ library;
 import 'package:flutter/material.dart';
 
 import '../../app_state.dart';
+import 'editor/editor_page.dart';
 import 'gallery/gallery_page.dart';
+import 'gallery/tags_page.dart';
 import 'theme.dart';
 import 'viewer/viewer_page.dart';
 
@@ -23,24 +25,30 @@ class AppShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 浏览视图为全窗沉浸式浮层（设计书 4.2：进入浏览视图切换为全窗布局）
+    // 层级：编辑视图 > 浏览视图（全窗沉浸式，设计书 4.2）> 双栏外壳
     return ValueListenableBuilder(
-      valueListenable: NavigatorStateEx.viewer,
-      builder: (context, open, _) {
-        if (open != null) {
-          return ViewerPage(list: open.list, initialIndex: open.index);
-        }
-        return ValueListenableBuilder<NavTab>(
-          valueListenable: NavigatorStateEx.currentTab,
-          builder: (context, tab, _) {
-            final content = _pageFor(tab);
-            if (!desktop) return content;
-            return Row(
-              children: [
-                _Sidebar(items: _items, current: tab, onSelect: (t) => NavigatorStateEx.currentTab.value = t),
-                const VerticalDivider(width: 1),
-                Expanded(child: content),
-              ],
+      valueListenable: NavigatorStateEx.editor,
+      builder: (context, editing, _) {
+        if (editing != null) return EditorPage(entry: editing);
+        return ValueListenableBuilder(
+          valueListenable: NavigatorStateEx.viewer,
+          builder: (context, open, _) {
+            if (open != null) {
+              return ViewerPage(list: open.list, initialIndex: open.index);
+            }
+            return ValueListenableBuilder<NavTab>(
+              valueListenable: NavigatorStateEx.currentTab,
+              builder: (context, tab, _) {
+                final content = _pageFor(tab);
+                if (!desktop) return content;
+                return Row(
+                  children: [
+                    _Sidebar(items: _items, current: tab, onSelect: (t) => NavigatorStateEx.currentTab.value = t),
+                    const VerticalDivider(width: 1),
+                    Expanded(child: content),
+                  ],
+                );
+              },
             );
           },
         );
@@ -50,7 +58,7 @@ class AppShell extends StatelessWidget {
 
   Widget _pageFor(NavTab tab) => switch (tab) {
         NavTab.gallery => const GalleryPage(),
-        NavTab.tags => const _Placeholder('标签 — S2 落地'),
+        NavTab.tags => const TagsPage(),
         NavTab.ai => const _Placeholder('AI 助手 — S4 落地'),
         NavTab.settings => const _Placeholder('设置 — S3 落地'),
       };

@@ -54,6 +54,16 @@ class AppState extends ChangeNotifier {
     await library.rescan();
   }
 
+  /// 共享 JsonStore（编辑栈等持久化用）。
+  JsonStore get store => library.store;
+
+  /// 标签页 → 图库的搜索词传递。
+  final pendingSearch = ValueNotifier<String>('');
+  void pendGallerySearch(String q) => pendingSearch.value = q;
+
+  /// 图库数据（标签/收藏等）变更后的公开刷新入口。
+  void refreshGallery() => notifyListeners();
+
   @override
   void dispose() {
     images.dispose();
@@ -66,8 +76,12 @@ class AppStateScope extends InheritedNotifier<AppState> {
   const AppStateScope({super.key, required AppState state, required super.child})
       : super(notifier: state);
 
-  static AppState of(BuildContext context) =>
-      context.dependOnInheritedWidgetOfExactType<AppStateScope>()!.notifier!;
+  static AppState of(BuildContext context, {bool listen = true}) {
+    final w = listen
+        ? context.dependOnInheritedWidgetOfExactType<AppStateScope>()
+        : context.getInheritedWidgetOfExactType<AppStateScope>();
+    return w!.notifier!;
+  }
 }
 
 /// 全局导航（图库↔浏览视图切换）。
@@ -85,4 +99,9 @@ class NavigatorStateEx {
       viewer.value = (list: list, index: index.clamp(0, list.length - 1));
 
   static void closeViewer() => viewer.value = null;
+
+  /// 编辑视图当前条目；null 表示未在编辑。
+  static final ValueNotifier<ImageEntry?> editor = ValueNotifier(null);
+
+
 }
