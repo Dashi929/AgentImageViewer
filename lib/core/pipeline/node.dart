@@ -8,6 +8,7 @@ library;
 /// 操作类型常量。新增节点必须登记到这里与 [defaultRegistry]。
 abstract final class Ops {
   static const rotate = 'rotate';
+  static const freeRotate = 'free_rotate';
   static const flip = 'flip';
   static const crop = 'crop';
   static const adjust = 'adjust';
@@ -88,6 +89,14 @@ Map<String, FilterNode Function(Map<String, Object?>?)> _buildRegistry() {
     final deg = p['deg'];
     if (deg is! num || const {90, 180, 270, -90}.contains(deg.toInt()) == false) {
       throw ArgumentError.value(deg, 'deg', '必须为 90/180/270/-90');
+    }
+  });
+
+  // free_rotate: deg ∈ [-180, 180]（任意角度，包围盒扩展）
+  r[Ops.freeRotate] = make(Ops.freeRotate, (p) {
+    final deg = p['deg'];
+    if (deg is! num || deg.isNaN || deg < -180 || deg > 180) {
+      throw ArgumentError.value(deg, 'deg', '必须为 -180~180 的数值');
     }
   });
 

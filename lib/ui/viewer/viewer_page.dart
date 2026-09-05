@@ -15,6 +15,7 @@ import '../../app_state.dart';
 import '../../core/image/exif.dart';
 import '../../core/image/image_manager.dart';
 import '../../core/scanner.dart';
+import '../../core/viewer/slideshow.dart';
 import '../../core/viewer/viewer_state.dart';
 import '../../platform/trash.dart';
 import '../shortcuts_sheet.dart';
@@ -49,6 +50,14 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
   ui.Codec? _animCodec;
   Timer? _animTimer;
   bool _animPaused = false;
+
+  // 幻灯片（设计书 2.2：间隔 1/3/5/10s 可选，随机与循环）
+  bool _slideshow = false;
+  int _slideIntervalSec = 3;
+  bool _slideRandom = false;
+  bool _slideLoop = true;
+  Timer? _slideTimer;
+  final math.Random _slideRng = math.Random();
 
   @override
   void initState() {
@@ -220,6 +229,122 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     }
   }
 
+  // ---------- 幻灯片（设计书 2.2 / 表 5-3） ----------
+
+  void _toggleSlideshow() {
+    if (_slideshow) {
+      _stopSlideshow();
+    } else {
+      _startSlideshow();
+    }
+  }
+
+  void _startSlideshow() {
+    _slideshow = true;
+    _showOsd('幻灯片开始');
+    _scheduleNextSlide();
+    setState(() {});
+  }
+
+  void _stopSlideshow() {
+    _slideshow = false;
+    _slideTimer?.cancel();
+    _slideTimer = null;
+    _showOsd('幻灯片暂停');
+    setState(() {});
+  }
+
+  void _scheduleNextSlide() {
+    _slideTimer?.cancel();
+    if (!_slideshow) return;
+    _slideTimer = Timer(Duration(seconds: _slideIntervalSec), _advanceSlide);
+  }
+
+  void _advanceSlide() {
+    if (!_slideshow || !mounted) return;
+    final next = nextSlideIndex(
+      current: _nav.index,
+      count: _nav.count,
+      random: _slideRandom,
+      loop: _slideLoop,
+      rng: _slideRng,
+    );
+    if (next == null) {
+      _stopSlideshow();
+      _showOsd('幻灯片播放完毕');
+      return;
+    }
+    _nav.index = next;
+    _openCurrent();
+    _scheduleNextSlide();
+  }
+
+  /// 幻灯片设置弹层：间隔 1/3/5/10 秒、随机、循环。
+  Future<void> _showSlideshowSettings() async {
+    _wakeControls();
+    await showMenu<String>(
+      context: context,
+      position: const RelativeRect.fromLTRB(200, 400, 200, 200),
+      items: [
+        for (final sec in slideshowIntervals)
+          PopupMenuItem(
+            value: 'i$sec',
+            child: Row(
+              children: [
+                if (sec == _slideIntervalSec)
+                  const Icon(Icons.check, size: 16, color: AppColors.accent)
+                else
+                  const SizedBox(width: 16),
+                const SizedBox(width: 6),
+                Text('$sec 秒间隔'),
+              ],
+            ),
+          ),
+        const PopupMenuDivider(),
+        PopupMenuItem(
+          value: 'random',
+          child: Row(
+            children: [
+              Icon(
+                _slideRandom ? Icons.check_box : Icons.check_box_outline_blank,
+                size: 16,
+                color: _slideRandom ? AppColors.accent : AppColors.textSecondary,
+              ),
+              const SizedBox(width: 6),
+              const Text('随机顺序'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'loop',
+          child: Row(
+            children: [
+              Icon(
+                _slideLoop ? Icons.check_box : Icons.check_box_outline_blank,
+                size: 16,
+                color: _slideLoop ? AppColors.accent : AppColors.textSecondary,
+              ),
+              const SizedBox(width: 6),
+              const Text('循环播放'),
+            ],
+          ),
+        ),
+      ],
+    ).then((value) {
+      if (value == null) return;
+      setState(() {
+        if (value.startsWith('i')) {
+          _slideIntervalSec = int.parse(value.substring(1));
+        } else if (value == 'random') {
+          _slideRandom = !_slideRandom;
+        } else if (value == 'loop') {
+          _slideLoop = !_slideLoop;
+        }
+      });
+      if (_slideshow) _scheduleNextSlide(); // 间隔变更立即生效
+    });
+  }
+
   void _toggleAnimPause() {
     if (_animCodec == null) return;
     _animPaused = !_animPaused;
@@ -354,6 +479,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
+    _slideTimer?.cancel();
     _animTimer?.cancel();
     _animCodec?.dispose();
     _displayImage?.dispose(); // 动图帧自管，静态图由 ImageManager 统一释放
@@ -396,7 +522,13 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
             NavigatorStateEx.closeViewer();
           }
         },
-        const SingleActivator(LogicalKeyboardKey.space): _toggleAnimPause,
+        const SingleActivator(LogicalKeyboardKey.space): () {
+          if (_animCodec != null) {
+            _toggleAnimPause();
+          } else {
+            _toggleSlideshow();
+          }
+        },
         const SingleActivator(LogicalKeyboardKey.keyI): _toggleInfo,
         const SingleActivator(LogicalKeyboardKey.slash, shift: true):
             () => showShortcutSheet(context),
@@ -612,10 +744,12 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
             setState(() {});
           }),
           const VerticalDivider(width: 12, indent: 12, endIndent: 12),
-          _barBtn(Icons.rotate_right, '旋转', () {
-            _displayRotateTurns = (_displayRotateTurns + 1) % 4;
-            setState(() {});
-          }),
+          _barBtn(
+            _slideshow ? Icons.pause_circle_outline : Icons.slideshow,
+            _slideshow ? '暂停幻灯片 (Space)' : '幻灯片 (Space)',
+            _toggleSlideshow,
+          ),
+          _barBtn(Icons.tune, '幻灯片设置', _showSlideshowSettings),
           _barBtn(Icons.edit_outlined, '编辑 (Ctrl+E)', () {
             NavigatorStateEx.editor.value = _entry;
           }),

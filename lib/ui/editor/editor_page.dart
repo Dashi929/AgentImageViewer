@@ -79,6 +79,10 @@ class _EditorPageState extends State<EditorPage> {
   }
 
   void _addRotate(int deg) => _addNode(FilterNode(op: Ops.rotate, params: {'deg': deg}));
+
+  /// 自由旋转（设计书 表 2-3：任意角度，包围盒扩展）
+  void _commitFreeRotate(double deg) =>
+      _addNode(FilterNode(op: Ops.freeRotate, params: {'deg': deg}));
   void _addFlip(String axis) => _addNode(FilterNode(op: Ops.flip, params: {'axis': axis}));
 
   void _commitAdjust(Map<String, double> params) {
@@ -517,6 +521,11 @@ class _EditorPageState extends State<EditorPage> {
           ],
         ),
         const SizedBox(height: 10),
+        const Text('自由旋转',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        _FreeRotateControl(onApply: _commitFreeRotate),
+        const SizedBox(height: 10),
         _panelTitle('裁剪'),
         const Text('在画布上拖拽框选区域；常用比例：',
             style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
@@ -713,6 +722,58 @@ class _CompareButtonState extends State<_CompareButton> {
         ),
         tooltip: '按住与原图对比',
       ),
+    );
+  }
+}
+
+/// 自由旋转控制：滑杆 -180°~180°，实时显示角度，应用入栈。
+class _FreeRotateControl extends StatefulWidget {
+  const _FreeRotateControl({required this.onApply});
+
+  final ValueChanged<double> onApply;
+
+  @override
+  State<_FreeRotateControl> createState() => _FreeRotateControlState();
+}
+
+class _FreeRotateControlState extends State<_FreeRotateControl> {
+  double _deg = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Slider(
+                value: _deg,
+                min: -180,
+                max: 180,
+                divisions: 72, // 5° 步进
+                label: '${_deg.round()}°',
+                onChanged: (v) => setState(() => _deg = v),
+              ),
+            ),
+            SizedBox(
+              width: 44,
+              child: Text('${_deg.round()}°',
+                  style: const TextStyle(fontSize: 12)),
+            ),
+          ],
+        ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton(
+            onPressed: _deg == 0 ? null : () {
+              widget.onApply(_deg);
+              setState(() => _deg = 0);
+            },
+            child: const Text('应用旋转'),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -28,6 +28,14 @@ const knownPresets = ['bw', 'sepia', 'film', 'cool', 'warm', 'fade'];
   var (w, h) = (srcW.toDouble(), srcH.toDouble());
   for (final n in nodes) {
     switch (n.op) {
+      case Ops.freeRotate:
+        final rad = (n.params['deg'] as num).toDouble() * math.pi / 180;
+        final cos = math.cos(rad).abs();
+        final sin = math.sin(rad).abs();
+        final nw = w * cos + h * sin;
+        final nh = w * sin + h * cos;
+        w = nw;
+        h = nh;
       case Ops.rotate:
         final t = w;
         w = h;
@@ -71,6 +79,24 @@ Future<ui.Image> _newCanvas(int w, int h, void Function(ui.Canvas c) draw) async
 
 Future<ui.Image> _apply(ui.Image img, FilterNode n) async {
   switch (n.op) {
+    case Ops.freeRotate:
+      final rad = (n.params['deg'] as num).toDouble() * math.pi / 180;
+      final cos = math.cos(rad).abs(), sin = math.sin(rad).abs();
+      final w = (img.width * cos + img.height * sin).ceil();
+      final h = (img.width * sin + img.height * cos).ceil();
+      return _newCanvas(w, h, (c) {
+        // 背景填充主题底色（旋转露出的角落）
+        c.drawRect(
+            ui.Offset.zero & ui.Size(w.toDouble(), h.toDouble()),
+            ui.Paint()..color = const ui.Color(0xFF14161A));
+        c.translate(w / 2, h / 2);
+        c.rotate(rad);
+        c.drawImage(
+            img,
+            ui.Offset(-img.width / 2, -img.height / 2),
+            ui.Paint()..filterQuality = ui.FilterQuality.medium);
+      });
+
     case Ops.rotate:
       final deg = (n.params['deg'] as num).toInt();
       final swap = deg == 90 || deg == -90;
