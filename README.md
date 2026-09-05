@@ -36,8 +36,10 @@ CI：`.github/workflows/ci.yml`（analyze + test，Ubuntu/Windows 双矩阵）�
 
 | 版本 | 范围 | 状态 |
 |---|---|---|
-| v0.1 MVP | Windows：浏览 + 编辑 + 图库 + 设置 | ✅ 已发布（tag v0.1.0，dist/ 有便携包） |
-| v0.2 | AI Agent | 未开始 |
-| v0.3 | Linux + 系统集成 | 未开始 |
-| v0.4 | 移动端 | 未开始 |
-| v1.0 | 全平台 | 未开始 |
+| v0.1 MVP | Windows：浏览 + 编辑 + 图库 + 设置 | ✅ tag v0.1.0 |
+| v0.2 | AI Agent（七工具决议循环 + 确认卡片 + 串行队列） | ✅ 完成 |
+| v0.3 | Windows 文件关联(HKCU) + 单实例外部打开 + 回收站 | ✅ 完成；托盘/壁纸/Linux 打包待做 |
+| v0.4 | 移动端：底部标签栏/两列网格/手势集/生命周期 | ✅ Android APK 构建通过；iOS 待真机验证 |
+| v1.0 | 四端一致性收尾、iOS 上架 | 未开始 |
+
+自动化测试：76 项（pipeline/求值引擎/编辑器/扫描/EXIF/图库/AI 客户端/Agent 循环/队列/平台命令），CI 双平台矩阵。
