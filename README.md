@@ -41,6 +41,7 @@ CI：`.github/workflows/ci.yml`（analyze + test，Ubuntu/Windows 双矩阵）�
 | v0.2 | AI Agent（七工具决议循环 + 确认卡片 + 串行队列） | ✅ 完成 |
 | v0.3 | Windows 文件关联(HKCU) + 单实例外部打开 + 回收站 | ✅ 完成；托盘/壁纸/Linux 打包待做 |
 | v0.4 | 移动端：底部标签栏/两列网格/手势集/生命周期 | ✅ Android APK 构建通过；iOS 待真机验证 |
+| 后续 | 幻灯片/自由旋转/AI 流式与批量任务卡片/图库四维度/快捷键速查/大图分级解码 | ✅ 完成（P1 批次） |
 | v1.0 | 四端一致性收尾、iOS 上架 | 未开始 |
 
 自动化测试：76 项（pipeline/求值引擎/编辑器/扫描/EXIF/图库/AI 客户端/Agent 循环/队列/平台命令），CI 双平台矩阵。
