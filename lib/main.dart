@@ -58,7 +58,7 @@ class AgentImageViewerApp extends StatelessWidget {
         theme: AppTheme.dark(),
         home: Stack(
           children: [
-            const AppShell(),
+            AppShell(),
             // 自绘标题栏拖动区 + 窗口控制按钮（仅桌面显示）
             const _TitleBar(),
           ],

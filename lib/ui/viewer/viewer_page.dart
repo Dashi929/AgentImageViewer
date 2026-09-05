@@ -29,7 +29,7 @@ class ViewerPage extends StatefulWidget {
   State<ViewerPage> createState() => _ViewerPageState();
 }
 
-class _ViewerPageState extends State<ViewerPage> {
+class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
   late final ViewerNavigator _nav =
       ViewerNavigator(count: widget.list.length, initial: widget.initialIndex);
   final ViewerState _view = ViewerState();
@@ -52,8 +52,31 @@ class _ViewerPageState extends State<ViewerPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _openCurrent();
     _armHideTimer();
+  }
+
+  // 移动端生命周期：退后台立即停止动图取帧（设计书 3.3）
+  bool _wasAnimPaused = false;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.paused || AppLifecycleState.hidden:
+        _wasAnimPaused = _animPaused;
+        if (_animCodec != null && !_animPaused) {
+          _animPaused = true;
+          _animTimer?.cancel();
+        }
+      case AppLifecycleState.resumed:
+        if (_animCodec != null && _animPaused && !_wasAnimPaused) {
+          _animPaused = false;
+          _playNextFrame();
+        }
+      default:
+        break;
+    }
   }
 
   ImageEntry get _entry => widget.list[_nav.index];
@@ -159,6 +182,9 @@ class _ViewerPageState extends State<ViewerPage> {
     }
   }
 
+  // 手势滑动累计（适应态翻页/返回判定）
+  Offset _swipeAccum = Offset.zero;
+
   void _navigate(bool forward) {
     final moved = forward ? _nav.next() : _nav.previous();
     if (moved) _openCurrent();
@@ -204,6 +230,7 @@ class _ViewerPageState extends State<ViewerPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
     _animTimer?.cancel();
     _animCodec?.dispose();
@@ -310,8 +337,32 @@ class _ViewerPageState extends State<ViewerPage> {
           }
           setState(() {});
         },
-        onPanUpdate: (d) {
-          _view.pan(d.delta.dx, d.delta.dy);
+        // 统一缩放手势：双指捏合以双指中心为锚点；单指拖拽平移（设计书 表 5-2）
+        onScaleStart: (d) => _swipeAccum = Offset.zero,
+        onScaleUpdate: (d) {
+          if (d.scale != 1.0) {
+            _view.zoomAt(d.scale, d.localFocalPoint.dx, d.localFocalPoint.dy);
+          } else {
+            _view.pan(d.focalPointDelta.dx, d.focalPointDelta.dy);
+          }
+          _swipeAccum += d.focalPointDelta;
+          setState(() {});
+        },
+        onScaleEnd: (d) {
+          // 适应态：左右滑动翻页（跟手位移由 pan 已呈现，此处按速度翻页）
+          if (_view.isAtFit) {
+            if (d.velocity.pixelsPerSecond.dx < -600 &&
+                _swipeAccum.dx < -60) {
+              _navigate(true);
+            } else if (d.velocity.pixelsPerSecond.dx > 600 &&
+                _swipeAccum.dx > 60) {
+              _navigate(false);
+            } else if (d.velocity.pixelsPerSecond.dy < -800 &&
+                _swipeAccum.dy < -80) {
+              NavigatorStateEx.closeViewer(); // 底部上滑返回图库
+            }
+          }
+          _swipeAccum = Offset.zero;
           setState(() {});
         },
         child: _buildTransform(img),

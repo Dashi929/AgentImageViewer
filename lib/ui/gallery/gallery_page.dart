@@ -23,6 +23,9 @@ class GalleryPage extends StatefulWidget {
 class _GalleryPageState extends State<GalleryPage> {
   String _query = '';
   bool _scanning = false;
+  bool get _mobile =>
+      !const bool.fromEnvironment('dart.library.js_util') &&
+      (Platform.isAndroid || Platform.isIOS);
 
   @override
   Widget build(BuildContext context) {
@@ -83,8 +86,8 @@ class _GalleryPageState extends State<GalleryPage> {
                 )
               : GridView.builder(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: 220,
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: _mobile ? 2 : 4, // 移动端两列（4.5 节）
                     childAspectRatio: 0.82,
                     mainAxisSpacing: 12,
                     crossAxisSpacing: 12,
@@ -246,6 +249,12 @@ class _ThumbCardState extends State<_ThumbCard> {
       child: InkWell(
         onTap: widget.onOpen,
         onSecondaryTapUp: (d) => _showContextMenu(context, d.globalPosition),
+        onLongPress: () {
+          // 移动端长按呼出同一套菜单（设计书 5.2/5.4）
+          if (Platform.isAndroid || Platform.isIOS) {
+            _showContextMenu(context, const Offset(80, 200));
+          }
+        },
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

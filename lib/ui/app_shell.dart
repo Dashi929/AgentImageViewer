@@ -3,6 +3,8 @@
 /// S0 阶段各导航页为占位，随后续里程碑逐个落地。
 library;
 
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 
 import '../../app_state.dart';
@@ -15,7 +17,8 @@ import 'settings/settings_page.dart';
 import 'viewer/viewer_page.dart';
 
 class AppShell extends StatelessWidget {
-  const AppShell({super.key, this.desktop = true});
+  AppShell({super.key, bool? desktop})
+      : desktop = desktop ?? !Platform.isAndroid && !Platform.isIOS;
 
   final bool desktop;
   final _items = const [
@@ -42,7 +45,7 @@ class AppShell extends StatelessWidget {
               valueListenable: NavigatorStateEx.currentTab,
               builder: (context, tab, _) {
                 final content = _pageFor(tab);
-                if (!desktop) return content;
+                if (!desktop) return _mobileScaffold(tab, content);
                 return Row(
                   children: [
                     _Sidebar(items: _items, current: tab, onSelect: (t) => NavigatorStateEx.currentTab.value = t),
@@ -55,6 +58,29 @@ class AppShell extends StatelessWidget {
           },
         );
       },
+    );
+  }
+
+  /// 移动端：竖屏单栏 + 底部标签栏（设计书 4.5/表 4-2）
+  Widget _mobileScaffold(NavTab tab, Widget content) {
+    return Scaffold(
+      body: SafeArea(child: content),
+      bottomNavigationBar: NavigationBar(
+        height: 60,
+        backgroundColor: AppColors.panel,
+        indicatorColor: AppColors.accent.withValues(alpha: 0.15),
+        selectedIndex: NavTab.values.indexOf(tab),
+        destinations: [
+          for (final (_, icon, label) in _items)
+            NavigationDestination(
+              icon: Icon(icon, size: 20, color: AppColors.textSecondary),
+              selectedIcon: Icon(icon, size: 20, color: AppColors.accent),
+              label: label,
+            ),
+        ],
+        onDestinationSelected: (i) =>
+            NavigatorStateEx.currentTab.value = NavTab.values[i],
+      ),
     );
   }
 
