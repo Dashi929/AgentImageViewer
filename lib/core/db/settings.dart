@@ -14,6 +14,7 @@ class Settings {
       'apiKey': '',
       'chatModel': 'glm-4-flash',
       'visionModel': 'glm-4v-flash',
+      'imageEditModel': '',
     },
     'perf': {'thumbSize': 320, 'cacheMB': 512},
   };
@@ -37,6 +38,11 @@ class Settings {
   set chatModel(String v) => _aiSet('chatModel', v);
   String get visionModel => _aiStr('visionModel');
   set visionModel(String v) => _aiSet('visionModel', v);
+
+  /// 生成式图像编辑模型（背景替换/消除/扩图）；为空表示未启用。
+  String get imageEditModel => _aiStr('imageEditModel');
+  set imageEditModel(String v) => _aiSet('imageEditModel', v);
+  bool get generativeEnabled => imageEditModel.isNotEmpty;
 
   bool get aiConfigured => apiKey.isNotEmpty;
 

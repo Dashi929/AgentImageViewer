@@ -62,6 +62,8 @@ class _SettingsPageState extends State<SettingsPage> {
           _field('API Key', s.apiKey, (v) => s.apiKey = v, obscure: true),
           _field('对话模型', s.chatModel, (v) => s.chatModel = v),
           _field('视觉模型', s.visionModel, (v) => s.visionModel = v),
+          _field('图像编辑模型（生成式改图，留空禁用）', s.imageEditModel,
+              (v) => s.imageEditModel = v),
         ]),
         _group('性能', '常规浏览常驻内存目标：桌面 ≤ 512 MB，移动端 ≤ 256 MB。', [
           _dropdown('缩略图尺寸', s.thumbSize.toString(), const ['160', '320', '480'],

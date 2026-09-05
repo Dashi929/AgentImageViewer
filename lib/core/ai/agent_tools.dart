@@ -8,6 +8,19 @@ import 'dart:io';
 
 import '../db/library.dart';
 
+/// 「这张图」类指令解析：用户提到当前图（这张/当前/正在看/此图/它）且未给路径时，
+/// 注入当前浏览图片路径作为上下文。纯函数。
+String? resolveTargetPath(String userText, String? currentImagePath) {
+  if (currentImagePath == null || currentImagePath.isEmpty) return null;
+  final t = userText.toLowerCase();
+  const refs = ['这张', '当前图', '正在看', '此图', '这一张', '当前这张', '它'];
+  final hasRef = refs.any(t.contains);
+  final hasExplicitPath =
+      t.contains('/') || t.contains(String.fromCharCode(92));
+  if (hasRef && !hasExplicitPath) return currentImagePath;
+  return null;
+}
+
 class ToolSpec {
   const ToolSpec({
     required this.name,

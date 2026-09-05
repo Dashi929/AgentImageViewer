@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows
+            artifact: AgentImageViewer-windows-x64
+          - os: ubuntu-latest
+            target: android
+            artifact: AgentImageViewer-android
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+      - name: Build Windows (portable zip)
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          flutter build windows --release
+          Compress-Archive -Path 'build/windows/x64/runner/Release/*' -DestinationPath "${{ matrix.artifact }}.zip"
+
+      - name: Build Android (APK)
+        if: matrix.target == 'android'
+        run: flutter build apk --release
+      - name: Collect Android artifact
+        if: matrix.target == 'android'
+        run: cp build/app/outputs/flutter-apk/app-release.apk "${{ matrix.artifact }}.apk"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            AgentImageViewer-windows-x64.zip
+            AgentImageViewer-android.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

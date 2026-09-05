@@ -10,6 +10,7 @@ import '../../app_state.dart';
 import '../../core/ai/agent_session.dart';
 import '../../core/ai/ai_client.dart';
 import '../../core/ai/agent_tools.dart';
+import '../../core/ai/generative.dart';
 import '../../core/db/settings.dart';
 import '../theme.dart';
 
@@ -59,6 +60,13 @@ class _AiPanelState extends State<AiPanel> {
       apiKey: settings.apiKey,
       model: settings.chatModel,
     ));
+    final gen = settings.generativeEnabled
+        ? GenerativeClient(GenerativeConfig(
+            baseUrl: settings.aiBaseUrl,
+            apiKey: settings.apiKey,
+            model: settings.imageEditModel,
+          ))
+        : null;
     setState(() {
       _session = AgentSession(
         client: client,
@@ -67,6 +75,7 @@ class _AiPanelState extends State<AiPanel> {
           visionImageOfPath: (path) => _readImageBytes(path),
         ),
         visionModel: settings.visionModel,
+        generative: gen,
       );
       _configError = '';
     });
@@ -87,13 +96,25 @@ class _AiPanelState extends State<AiPanel> {
     return f.readAsBytes();
   }
 
+  /// 当前浏览图片（设计书 5.5：'描述一下这张图' 依赖当前图上下文）
+  String? get _currentImagePath {
+    final v = NavigatorStateEx.viewer.value;
+    if (v == null) return null;
+    return v.list[v.index].path;
+  }
+
   Future<void> _send() async {
-    final text = _input.text.trim();
+    var text = _input.text.trim();
     if (text.isEmpty || _session == null || _busy) return;
     _input.clear();
+    // 上下文联动：'这张图' 类指令自动携带当前浏览路径
+    final target = resolveTargetPath(text, _currentImagePath);
+    if (target != null) {
+      text = '$text${String.fromCharCode(10)}（上下文：当前正在查看 $target）';
+    }
     setState(() {
       _busy = true;
-      _entries.add(_Entry.text(text));
+      _entries.add(_Entry.text(_inputText(text, target != null)));
     });
     await for (final ev in _session!.send(text)) {
       if (!mounted) return;
@@ -307,3 +328,7 @@ class _AiPanelState extends State<AiPanel> {
     );
   }
 }
+
+/// 面板显示文案：注入上下文时不暴露长路径。
+String _inputText(String text, bool injected) =>
+    injected ? text.split('${String.fromCharCode(10)}（上下文：')[0] : text;

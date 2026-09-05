@@ -4,9 +4,11 @@
 library;
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'ai_client.dart';
 import 'agent_tools.dart';
+import 'generative.dart';
 
 sealed class AgentEvent {}
 
@@ -44,11 +46,15 @@ class AgentSession {
     required this.client,
     required this.tools,
     this.visionModel,
+    this.generative,
     this.maxTurns = 8,
   });
 
   final ChatBackend client;
   final AgentTools tools;
+
+  /// 生成式图像编辑客户端（背景替换/消除/扩图）；为 null 时该类指令被拒绝。
+  final GenerativeClient? generative;
 
   /// 视觉模型名（识图/OCR 单独使用；为空则退回对话模型）。
   final String? visionModel;
@@ -107,9 +113,7 @@ class AgentSession {
         return await _vision(call.name, call.arguments);
       }
       if (call.name == 'ai_edit') {
-        final plan = _compileEdit(call.arguments);
-        return AgentToolResult.ok(
-            '${plan.explanation}${plan.nodes.isEmpty ? '' : '：${plan.nodes.map((n) => n.op).join(' → ')}'}');
+        return await _aiEdit(call.arguments);
       }
       return await tools.dispatch(call.name, call.arguments);
     } catch (e) {
@@ -156,14 +160,46 @@ class AgentSession {
     if (ins.contains('锐化') || ins.contains('清晰')) {
       return EditPlan(nodes, '清晰度增强暂不支持，已忽略该子指令');
     }
-    if (ins.contains('背景') || ins.contains('消除') || ins.contains('扩图')) {
-      return EditPlan(const [], '该指令涉及生成式云端处理，当前版本不支持（执行前会上传图片，需要更多授权）。');
-    }
 
     if (nodes.isEmpty) {
       return EditPlan(const [], '无法把指令「$instruction」编译为本地编辑操作');
     }
     return EditPlan(nodes, '已编译为 ${nodes.length} 个本地编辑节点');
+  }
+
+  /// ai_edit：先尝试本地编译；生成式指令走云端（需配置 + 用户确认上传）。
+  Future<AgentToolResult> _aiEdit(Map<String, Object?> args) async {
+    final path = args['path'] as String? ?? '';
+    final instruction = args['instruction'] as String? ?? '';
+
+    if (!isGenerativeInstruction(instruction)) {
+      final plan = _compileEdit(args);
+      return AgentToolResult.ok(
+          '${plan.explanation}${plan.nodes.isEmpty ? '' : '：${plan.nodes.map((n) => n.op).join(' → ')}'}');
+    }
+
+    final gen = generative;
+    if (gen == null) {
+      return AgentToolResult.ok('生成式改图（$instruction）需要先在「设置 → AI 设置」配置图像编辑模型。');
+    }
+
+    return AgentToolResult.confirm(PendingAction(
+      toolName: 'ai_edit_generative',
+      summary: '生成式改图需要把「$path」上传到 ${gen.config.baseUrl} '
+          '（模型 ${gen.config.model}）执行：「$instruction」。\n'
+          '上传后图片将由该服务处理，结果保存为副本，不覆盖原图。是否继续？',
+      execute: () async {
+        final bytes = await File(path).readAsBytes();
+        final result = await gen.editImage(imageBytes: bytes, prompt: instruction);
+        final dir = path.substring(0, path.lastIndexOf(Platform.pathSeparator));
+        final base = path
+            .substring(path.lastIndexOf(Platform.pathSeparator) + 1)
+            .replaceAll(RegExp('[.][^.]+\$'), '');
+        final target = '$dir${Platform.pathSeparator}${base}_ai.png';
+        await File(target).writeAsBytes(result.pngBytes, flush: true);
+        return '生成完成，已保存副本：$target';
+      },
+    ));
   }
 
   /// 用户在确认卡片点击「确认」后由 UI 调用；结果回填会话。

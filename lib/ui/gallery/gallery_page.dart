@@ -6,11 +6,15 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../app_state.dart';
 import '../../core/image/image_manager.dart';
+import '../../core/image/heic_support.dart';
 import '../../core/scanner.dart';
 import '../../platform/trash.dart';
+
 import '../theme.dart';
 
 class GalleryPage extends StatefulWidget {
@@ -23,6 +27,15 @@ class GalleryPage extends StatefulWidget {
 class _GalleryPageState extends State<GalleryPage> {
   String _query = '';
   bool _scanning = false;
+
+  void _osd(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(msg, style: const TextStyle(fontSize: 13))));
+  }
   bool get _mobile =>
       !const bool.fromEnvironment('dart.library.js_util') &&
       (Platform.isAndroid || Platform.isIOS);
@@ -41,6 +54,13 @@ class _GalleryPageState extends State<GalleryPage> {
           onAddFolder: () async {
             final picked = await _pickFolder();
             if (picked == null) return;
+            if (Platform.isAndroid || Platform.isIOS) {
+              final st = await _ensureMediaPermission();
+              if (!st) {
+                _osd('未获得相册读取权限，请在系统设置中授权后重试');
+                return;
+              }
+            }
             setState(() => _scanning = true);
             await state.addFolder(picked);
             if (mounted) setState(() => _scanning = false);
@@ -109,8 +129,18 @@ class _GalleryPageState extends State<GalleryPage> {
     return state.library.search(_query);
   }
 
+  Future<bool> _ensureMediaPermission() async {
+    if (Platform.isAndroid) {
+      var st = await Permission.photos.request();
+      if (!st.isGranted) st = await Permission.storage.request();
+      return st.isGranted;
+    }
+    if (Platform.isIOS) return (await Permission.photos.request()).isGranted;
+    return true;
+  }
+
   Future<String?> _pickFolder() async {
-    // S1：无 file_selector 依赖，先用文本输入兜底；S3 换系统目录选择器。
+    // 移动端预填常见媒体目录；桌面为文本输入（后续里程碑换系统目录选择器）。
     final ctrl = TextEditingController();
     final result = await showDialog<String>(
       context: context,
@@ -119,7 +149,11 @@ class _GalleryPageState extends State<GalleryPage> {
         content: TextField(
           controller: ctrl,
           autofocus: true,
-          decoration: const InputDecoration(hintText: r'例如 E:\Pictures'),
+          decoration: InputDecoration(
+            hintText: Platform.isAndroid || Platform.isIOS
+                ? '/storage/emulated/0/Pictures'
+                : r'例如 E:\Pictures',
+          ),
         ),
         actions: [
           TextButton(
@@ -266,11 +300,23 @@ class _ThumbCardState extends State<_ThumbCard> {
                 future: _future,
                 builder: (context, snap) {
                   if (snap.hasError) {
-                    return const ColoredBox(
-                      color: Color(0xFF2A2E36),
-                      child: Center(
-                          child: Icon(Icons.broken_image_outlined,
-                              color: AppColors.textSecondary)),
+                    final ext = SupportedFormats.pathExtension(widget.entry.path);
+                    final isHeic = ext == '.heic' || ext == '.heif';
+                    return ColoredBox(
+                      color: const Color(0xFF2A2E36),
+                      child: InkWell(
+                        onTap: isHeic
+                            ? () => showHeicGuidance(context)
+                            : null,
+                        child: Center(
+                          child: Icon(
+                            isHeic
+                                ? Icons.help_outline
+                                : Icons.broken_image_outlined,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ),
                     );
                   }
                   final d = snap.data;
@@ -497,4 +543,30 @@ class _EmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+
+/// HEIC 解码失败引导（设计书 2.2：检测缺失时给出引导提示）
+Future<void> showHeicGuidance(BuildContext context) async {
+  final support = await detectHeicSupport();
+  final text = heicGuidanceText(support);
+  if (!context.mounted) return;
+  await showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('HEIC 格式提示'),
+      content: Text(text.isEmpty ? '该文件无法解码。' : text,
+          style: const TextStyle(fontSize: 13)),
+      actions: [
+        if (support == HeicSupport.missing && Platform.isWindows)
+          TextButton(
+            onPressed: () => launchUrl(heifStoreUri()),
+            child: const Text('打开 Microsoft Store'),
+          ),
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('知道了')),
+      ],
+    ),
+  );
 }
