@@ -3,6 +3,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'app_state.dart';
 import 'ui/app_shell.dart';
 import 'ui/theme.dart';
 
@@ -23,24 +24,30 @@ Future<void> main() async {
     });
   }
 
-  runApp(const AgentImageViewerApp());
+  final state = await AppState.create();
+  runApp(AgentImageViewerApp(state: state));
 }
 
 class AgentImageViewerApp extends StatelessWidget {
-  const AgentImageViewerApp({super.key});
+  const AgentImageViewerApp({super.key, required this.state});
+
+  final AppState state;
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'AgentImageViewer',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.dark(),
-      home: Stack(
-        children: [
-          const AppShell(),
-          // 自绘标题栏拖动区 + 窗口控制按钮（仅桌面显示）
-          const _TitleBar(),
-        ],
+    return AppStateScope(
+      state: state,
+      child: MaterialApp(
+        title: 'AgentImageViewer',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.dark(),
+        home: Stack(
+          children: [
+            const AppShell(),
+            // 自绘标题栏拖动区 + 窗口控制按钮（仅桌面显示）
+            const _TitleBar(),
+          ],
+        ),
       ),
     );
   }

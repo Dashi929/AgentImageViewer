@@ -91,4 +91,7 @@ class LruCache<K, V> {
 
   V? remove(K key) => _map.remove(key);
   void clear() => _map.clear();
+
+  Iterable<K> get keys => _map.keys;
+  Iterable<V> get values => _map.values;
 }
