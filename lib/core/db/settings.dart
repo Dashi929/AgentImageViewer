@@ -17,6 +17,7 @@ class Settings {
       'imageEditModel': '',
     },
     'perf': {'thumbSize': 320, 'cacheMB': 512},
+    'system': {'assocEnabled': false},
   };
 
   /// 深拷贝为可变结构（const 默认值不可修改）。
@@ -43,6 +44,14 @@ class Settings {
   String get imageEditModel => _aiStr('imageEditModel');
   set imageEditModel(String v) => _aiSet('imageEditModel', v);
   bool get generativeEnabled => imageEditModel.isNotEmpty;
+
+  // ---- 系统 ----
+  bool get assocEnabled => ((data['system'] as Map?)?['assocEnabled'] as bool?) ?? false;
+  set assocEnabled(bool v) {
+    final sys = Map<String, Object?>.of((data['system'] as Map? ?? {}).cast<String, Object?>());
+    sys['assocEnabled'] = v;
+    data['system'] = sys;
+  }
 
   bool get aiConfigured => apiKey.isNotEmpty;
 
@@ -87,6 +96,10 @@ class SettingsStore {
       s.data['perf'] = Settings._mutable({
         ...(defaults['perf'] as Map<String, Object?>),
         ...((raw['perf'] as Map? ?? {}).cast<String, Object?>()),
+      });
+      s.data['system'] = Settings._mutable({
+        ...(defaults['system'] as Map<String, Object?>),
+        ...((raw['system'] as Map? ?? {}).cast<String, Object?>()),
       });
     }
     return s;

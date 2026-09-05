@@ -11,7 +11,7 @@ import 'ui/shortcuts_sheet.dart';
 import 'ui/app_shell.dart';
 import 'ui/theme.dart';
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
   if (!Platform.isAndroid && !Platform.isIOS) {
@@ -30,9 +30,15 @@ Future<void> main() async {
 
   final state = await AppState.create();
   if (!Platform.isAndroid && !Platform.isIOS) {
+    // 首次启动带图片参数（资源管理器双击）→ 直接登记并打开（设计书 6.1）
+    final startupImage = extractImagePath(args);
+    if (startupImage != null) {
+      await state.registerExternalOpen(startupImage);
+    }
+
     // 单实例锁：再次双击图片时把路径转发给已开窗口（设计书 6.1）
     await WindowsSingleInstance.ensureSingleInstance(
-      const [],
+      args,
       'com.dashi929.agent_image_viewer',
       onSecondWindow: (args) {
         final path = extractImagePath(args);

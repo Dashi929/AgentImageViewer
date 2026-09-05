@@ -9,6 +9,7 @@ import '../../app_state.dart';
 import '../../core/db/settings.dart';
 import '../../platform/file_assoc.dart';
 import '../theme.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -38,7 +39,12 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _load() async {
     final app = AppStateScope.of(context, listen: false);
     final s = await SettingsStore(app.store).load();
-    if (mounted) setState(() => _settings = s);
+    if (mounted) {
+      setState(() {
+        _settings = s;
+        _assocEnabled = s.assocEnabled; // 恢复上次注册状态
+      });
+    }
   }
 
   Future<void> _persist() async {
@@ -76,6 +82,7 @@ class _SettingsPageState extends State<SettingsPage> {
             SwitchListTile(
               value: _assocEnabled,
               onChanged: (v) async {
+                final app = AppStateScope.of(context, listen: false);
                 final assoc = FileAssoc(
                   exeName: 'AgentImageViewer',
                   exePath: Platform.resolvedExecutable,
@@ -84,9 +91,15 @@ class _SettingsPageState extends State<SettingsPage> {
                 final ok = v
                     ? await assoc.register(defaultAssocExtensions)
                     : await assoc.unregister(defaultAssocExtensions);
+                _settings!.assocEnabled = v && ok;
+                await SettingsStore(app.store).save(_settings!);
                 if (mounted) {
                   setState(() => _assocEnabled = v && ok);
-                  _showResult(ok ? '文件关联已${v ? '注册' : '取消'}' : '操作失败，请重试');
+                  _showResult(ok
+                      ? (v
+                          ? '已写入「打开方式」注册表。若要设为默认，请点击下方「打开系统默认应用设置」。'
+                          : '文件关联已全部取消')
+                      : '操作失败，请重试');
                 }
               },
               title: const Text('设为以下格式的默认打开方式',
@@ -94,6 +107,16 @@ class _SettingsPageState extends State<SettingsPage> {
               subtitle: const Text('jpg jpeg png gif webp bmp avif',
                   style: TextStyle(fontSize: 12)),
             ),
+            if (_assocEnabled && Platform.isWindows)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () =>
+                      launchUrl(Uri.parse('ms-settings:defaultapps')),
+                  icon: const Icon(Icons.settings, size: 16),
+                  label: const Text('打开系统「默认应用」设置'),
+                ),
+              ),
           ],
           const ListTile(
             enabled: false,
