@@ -216,7 +216,7 @@ void main() {
     final toolMsgs =
         fake.lastMessages.where((m) => m.role == 'tool').map((m) => m.text).join('\n');
     expect(toolMsgs, contains('preset'), reason: '日系冷调应编译出 preset 节点');
-    expect(toolMsgs, contains('不支持'), reason: '生成式指令应明确拒绝');
+    expect(toolMsgs, contains('配置图像编辑模型'), reason: '未配置生成式模型时应明确提示');
   });
 
   test('AI 任务队列：单张失败不中断，失败可重试，汇总正确', () async {
