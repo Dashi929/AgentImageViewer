@@ -27,6 +27,9 @@ class GalleryPage extends StatefulWidget {
 class _GalleryPageState extends State<GalleryPage> {
   String _query = '';
   bool _scanning = false;
+  _GalleryFilter _filter = _GalleryFilter.all;
+  String? _folderFilter; // 文件夹维度：指定监控目录
+  GallerySort _sort = GallerySort.name;
 
   void _osd(String msg) {
     if (!mounted) return;
@@ -43,7 +46,7 @@ class _GalleryPageState extends State<GalleryPage> {
   @override
   Widget build(BuildContext context) {
     final state = AppStateScope.of(context);
-    final entries = _filter(state.library.entries);
+    final entries = _applyFilter(state.library.entries);
     final folders = state.library.folders;
 
     return Column(
@@ -67,28 +70,78 @@ class _GalleryPageState extends State<GalleryPage> {
           },
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
           child: Row(
             children: [
-              Text(
-                '${entries.length} 张图片'
-                '${folders.isEmpty ? '' : ' · ${folders.length} 个文件夹'}',
-                style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+              for (final f in _GalleryFilter.values)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: ChoiceChip(
+                    label: Text(_filterLabel(f, _folderFilter),
+                        style: const TextStyle(fontSize: 12)),
+                    selected: _filter == f,
+                    onSelected: (_) => setState(() {
+                      _filter = f;
+                      if (f == _GalleryFilter.folder && _folderFilter == null) {
+                        _folderFilter = folders.isNotEmpty ? folders.first : null;
+                      }
+                    }),
+                  ),
+                ),
+              const Spacer(),
+              // 排序方式：点击循环（设计书 4.3.1 元信息行）
+              InkWell(
+                onTap: () => setState(() {
+                  final vals = GallerySort.values;
+                  _sort = vals[(vals.indexOf(_sort) + 1) % vals.length];
+                }),
+                borderRadius: BorderRadius.circular(4),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('${entries.length} 张 · ${_sortLabel(_sort)}',
+                          style: const TextStyle(
+                              color: AppColors.textSecondary, fontSize: 12)),
+                      const Icon(Icons.sort, size: 14,
+                          color: AppColors.textSecondary),
+                    ],
+                  ),
+                ),
               ),
               if (_scanning) ...[
                 const SizedBox(width: 10),
                 const SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
-                const SizedBox(width: 6),
-                const Text('扫描中…',
-                    style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                    width: 12, height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2)),
               ],
             ],
           ),
         ),
+        if (_filter == _GalleryFilter.folder && folders.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: DropdownButton<String>(
+                value:
+                    folders.contains(_folderFilter) ? _folderFilter : folders.first,
+                isDense: true,
+                underline: const SizedBox.shrink(),
+                items: [
+                  for (final f in folders)
+                    DropdownMenuItem(
+                        value: f,
+                        child: Text(f,
+                            style: const TextStyle(fontSize: 11),
+                            overflow: TextOverflow.ellipsis)),
+                ],
+                onChanged: (v) => setState(() => _folderFilter = v),
+              ),
+            ),
+          ),
         Expanded(
           child: entries.isEmpty
               ? _EmptyState(
@@ -104,7 +157,9 @@ class _GalleryPageState extends State<GalleryPage> {
                           }
                         },
                 )
-              : GridView.builder(
+              : _filter == _GalleryFilter.time
+                  ? _TimeGroupedGrid(entries: entries, mobile: _mobile)
+                  : GridView.builder(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                     crossAxisCount: _mobile ? 2 : 4, // 移动端两列（4.5 节）
@@ -124,9 +179,23 @@ class _GalleryPageState extends State<GalleryPage> {
     );
   }
 
-  List<ImageEntry> _filter(List<ImageEntry> list) {
+  List<ImageEntry> _applyFilter(List<ImageEntry> list) {
     final state = AppStateScope.of(context);
-    return state.library.search(_query);
+    var out = state.library.search(_query);
+    switch (_filter) {
+      case _GalleryFilter.all:
+        break;
+      case _GalleryFilter.fav:
+        out = out.where((e) => e.favorite).toList();
+      case _GalleryFilter.folder:
+        if (_folderFilter != null) {
+          out = out.where((e) => e.path.startsWith(_folderFilter!)).toList();
+        }
+      case _GalleryFilter.time:
+        break; // 时间维度在分组呈现，不剔除
+    }
+    out.sort((a, b) => compareEntries(a, b, _sort));
+    return out;
   }
 
   Future<bool> _ensureMediaPermission() async {
@@ -569,4 +638,72 @@ Future<void> showHeicGuidance(BuildContext context) async {
       ],
     ),
   );
+}
+
+/// 图库四维度组织（设计书 2.5）：全部 / 收藏 / 时间 / 文件夹。
+enum _GalleryFilter { all, fav, time, folder }
+
+String _filterLabel(_GalleryFilter f, String? folder) => switch (f) {
+      _GalleryFilter.all => '全部',
+      _GalleryFilter.fav => '收藏',
+      _GalleryFilter.time => '时间',
+      _GalleryFilter.folder => folder == null
+          ? '文件夹'
+          : '文件夹：${folder.split('/').last.split(String.fromCharCode(92)).last}',
+    };
+
+String _sortLabel(GallerySort s) => switch (s) {
+      GallerySort.name => '名称',
+      GallerySort.time => '时间',
+      GallerySort.size => '大小',
+    };
+
+/// 时间维度：按月分组的网格（设计书 2.5 时间维度组织）。
+class _TimeGroupedGrid extends StatelessWidget {
+  const _TimeGroupedGrid({required this.entries, required this.mobile});
+
+  final List<ImageEntry> entries;
+  final bool mobile;
+
+  @override
+  Widget build(BuildContext context) {
+    final groups = groupByMonth(entries);
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      itemCount: groups.length,
+      itemBuilder: (context, gi) {
+        final g = groups[gi];
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(g.month,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textSecondary)),
+            ),
+            GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              padding: EdgeInsets.zero,
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: mobile ? 2 : 4,
+                childAspectRatio: 0.82,
+                mainAxisSpacing: 12,
+                crossAxisSpacing: 12,
+              ),
+              itemCount: g.items.length,
+              itemBuilder: (context, i) => _ThumbCard(
+                key: ValueKey(g.items[i].path),
+                entry: g.items[i],
+                onOpen: () => NavigatorStateEx.openViewer(g.items, i),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
 }

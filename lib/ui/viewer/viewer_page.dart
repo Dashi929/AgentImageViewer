@@ -17,6 +17,7 @@ import '../../core/image/image_manager.dart';
 import '../../core/scanner.dart';
 import '../../core/viewer/viewer_state.dart';
 import '../../platform/trash.dart';
+import '../shortcuts_sheet.dart';
 import '../theme.dart';
 
 class ViewerPage extends StatefulWidget {
@@ -99,14 +100,41 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     _view.resetForImage(preview.width, preview.height, _view.viewportW, _view.viewportH);
     setState(() {});
 
-    final full = await _app.images.decode(e.path, e.mtimeMs);
+    // 大图分级解码（设计书 3.3）：fit 级立即呈现，放大时按需升级，
+    // 避免 1 亿像素级原图整图解码的内存峰值。
     if (_entry.path == e.path) {
-      _applyDecoded(full);
-      _view.resetForImage(full.width, full.height, _view.viewportW, _view.viewportH);
+      _view.resetForImage(preview.width, preview.height, _view.viewportW, _view.viewportH);
       setState(() {});
       unawaited(_maybeAnimate(e));
       _prefetchNeighbors();
       WidgetsBinding.instance.addPostFrameCallback((_) => _ensureStripVisible());
+      unawaited(_maybeUpgrade());
+    }
+  }
+
+  /// 分级升级：缩放使所需分辨率超当前显示 1.5 倍时，解码更高级位图替换。
+  /// 上限 4096（≈43MB 位图内存），兼顾清晰度与内存上限（设计书 3.3）。
+  Future<void> _maybeUpgrade() async {
+    if (_upgrading || !mounted) return;
+    final img = _displayImage;
+    if (img == null || _view.imageWidth == 0) return;
+    final dpr = View.of(context).devicePixelRatio;
+    final fitTarget = (_view.viewportW * dpr).clamp(320, 2048).toInt();
+    final upper = math.min(_view.imageWidth, 4096);
+    final desired =
+        (_view.imageWidth * _view.scale * dpr).round().clamp(fitTarget, upper).toInt();
+    if (desired <= img.width * 3 ~/ 2) return; // 提升不足 50% 不值得重解码
+    _upgrading = true;
+    try {
+      final e = _entry;
+      final d = await _app.images.decode(e.path, e.mtimeMs, target: desired);
+      if (!mounted || _entry.path != e.path) return;
+      _applyDecoded(d);
+      setState(() {});
+    } catch (_) {
+      // 升级失败保持当前级
+    } finally {
+      _upgrading = false;
     }
   }
 
@@ -142,6 +170,34 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     _displayImage = info.image;
     setState(() {});
     _animTimer = Timer(info.duration, () => _playNextFrame());
+  }
+
+  TextEditingController? _renameCtrl;
+
+  /// F2 虚拟重命名当前图（设计书 5.3：虚拟操作，不修改真实文件）
+  Future<void> _renameCurrent() async {
+    final e = _entry;
+    _renameCtrl = TextEditingController(text: e.virtualName ?? e.name);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('虚拟重命名（不修改真实文件）'),
+        content: TextField(controller: _renameCtrl, autofocus: true),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () =>
+                  Navigator.pop(context, _renameCtrl?.text.trim()),
+              child: const Text('确定')),
+        ],
+      ),
+    );
+    if (name == null) return;
+    _app.library.setVirtualName(e.path, name.isEmpty ? null : name);
+    await _app.library.flush();
+    if (mounted) setState(() {});
   }
 
   Future<void> _deleteCurrent() async {
@@ -185,6 +241,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
 
   // 手势滑动累计（适应态翻页/返回判定）
   Offset _swipeAccum = Offset.zero;
+  bool _upgrading = false; // 分级解码进行中
   final ScrollController _stripController = ScrollController();
 
   /// 打开新图后把缩略图条滚动到当前项可见。
@@ -341,9 +398,12 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
         },
         const SingleActivator(LogicalKeyboardKey.space): _toggleAnimPause,
         const SingleActivator(LogicalKeyboardKey.keyI): _toggleInfo,
+        const SingleActivator(LogicalKeyboardKey.slash, shift: true):
+            () => showShortcutSheet(context),
         const SingleActivator(LogicalKeyboardKey.keyE, control: true): () =>
             NavigatorStateEx.editor.value = _entry,
         const SingleActivator(LogicalKeyboardKey.delete): _deleteCurrent,
+        const SingleActivator(LogicalKeyboardKey.f2): _renameCurrent,
       },
       child: Focus(
         autofocus: true,
@@ -387,7 +447,12 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     }
     return Listener(
       behavior: HitTestBehavior.opaque, // 画布整面可命中（含图像外黑边）
-      onPointerDown: (_) => _wakeControls(), // 触屏：触摸即唤醒控件（设计书 4.2）
+      onPointerDown: (d) {
+        // 鼠标侧键（设计书 表 5-1：前进/后退 → 下一张/上一张）
+        if (d.buttons == 8) _navigate(false); // 后退侧键
+        if (d.buttons == 16) _navigate(true); // 前进侧键
+        _wakeControls(); // 触屏：触摸即唤醒控件（设计书 4.2）
+      },
       onPointerMove: (_) => _wakeControls(),
       onPointerUp: _handleTapUp,
       onPointerSignal: (s) {
@@ -409,6 +474,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
           _swipeAccum += d.focalPointDelta;
           setState(() {});
         },
+
         onScaleEnd: (d) {
           // 适应态：左右滑动翻页（跟手位移由 pan 已呈现，此处按速度翻页）
           if (_view.isAtFit) {
@@ -425,6 +491,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
           }
           _swipeAccum = Offset.zero;
           setState(() {});
+          unawaited(_maybeUpgrade());
         },
         child: _buildTransform(img),
       ),
@@ -462,6 +529,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     _view.zoomAt(factor, _view.viewportW / 2, _view.viewportH / 2);
     setState(() {});
     _showOsd('${(_view.scale * 100).round()}%');
+    unawaited(_maybeUpgrade());
   }
 
   void _zoomAt(double factor, Offset focal) {

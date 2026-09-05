@@ -4,6 +4,8 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 enum TaskStatus { pending, running, success, failed }
 
 class TaskItem<T> {
@@ -18,7 +20,7 @@ class TaskItem<T> {
   T? result;
 }
 
-class AiTask<T> {
+class AiTask<T> extends ChangeNotifier {
   AiTask(this.title, List<TaskItem<T>> items) : _items = items;
 
   final String title;
@@ -42,6 +44,7 @@ class AiTask<T> {
       if (item.status == TaskStatus.success) continue;
       item.status = TaskStatus.running;
       _progress.add(this);
+      notifyListeners();
       try {
         item.result = await item.run();
         item.status = TaskStatus.success;
@@ -50,8 +53,10 @@ class AiTask<T> {
         item.status = TaskStatus.failed;
       }
       _progress.add(this);
+      notifyListeners();
     }
     _progress.add(this);
+    notifyListeners();
     return this;
   }
 
@@ -63,8 +68,12 @@ class AiTask<T> {
     return run();
   }
 
+  @override
+  void dispose() {
+    _progress.close();
+    super.dispose();
+  }
+
   /// 汇总文案：如「已识别 36/120，失败 2」。
   String summary() => '$doneCount/${_items.length}，失败 $failedCount';
-
-  void dispose() => _progress.close();
 }

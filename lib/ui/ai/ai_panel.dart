@@ -11,6 +11,7 @@ import '../../core/ai/agent_session.dart';
 import '../../core/ai/ai_client.dart';
 import '../../core/ai/agent_tools.dart';
 import '../../core/ai/generative.dart';
+import '../../core/ai/queue.dart';
 import '../../core/db/settings.dart';
 import '../theme.dart';
 
@@ -25,11 +26,21 @@ class _Entry {
   _Entry.text(this.text, {this.isError = false}) : action = null;
   _Entry.confirm(this.action) : text = null, isError = false;
   _Entry.tool(this.text) : action = null, isError = false;
+  _Entry.task(this.task)
+      : text = null,
+        isError = false,
+        action = null;
 
-  final String? text;
+  String? text;
   final bool isError;
   final PendingAction? action;
+  AiTask<List<String>>? task; // 批量任务卡片（设计书 4.3.4）
   bool resolved = false;
+  bool streaming = false; // 流式生成中：后续增量追加到本条
+
+  void appendDelta(String delta) {
+    text = (text ?? '') + delta;
+  }
 }
 
 class _AiPanelState extends State<AiPanel> {
@@ -96,6 +107,11 @@ class _AiPanelState extends State<AiPanel> {
     return f.readAsBytes();
   }
 
+  void _endStreaming() {
+    final last = _entries.lastOrNull;
+    if (last != null && last.streaming) last.streaming = false;
+  }
+
   /// 当前浏览图片（设计书 5.5：'描述一下这张图' 依赖当前图上下文）
   String? get _currentImagePath {
     final v = NavigatorStateEx.viewer.value;
@@ -112,26 +128,53 @@ class _AiPanelState extends State<AiPanel> {
     if (target != null) {
       text = '$text${String.fromCharCode(10)}（上下文：当前正在查看 $target）';
     }
+    final app = _appRef;
+    app?.aiStart();
     setState(() {
       _busy = true;
       _entries.add(_Entry.text(_inputText(text, target != null)));
     });
-    await for (final ev in _session!.send(text)) {
+    try {
+      await for (final ev in _session!.send(text)) {
       if (!mounted) return;
       setState(() {
         switch (ev) {
+          case AgentTextDelta(:final delta):
+            final last = _entries.lastOrNull;
+            if (last != null && last.streaming) {
+              last.appendDelta(delta);
+            } else {
+              final e = _Entry.text(delta)..streaming = true;
+              _entries.add(e);
+            }
           case AgentText(:final text):
-            _entries.add(_Entry.text(text));
+            final last = _entries.lastOrNull;
+            if (last != null && last.streaming) {
+              last
+                ..text = text
+                ..streaming = false;
+            } else {
+              _entries.add(_Entry.text(text));
+            }
           case AgentToolRun(:final toolName, :final args):
+            _endStreaming();
             _entries.add(_Entry.tool('调用工具 $toolName（${args.keys.join('/')}）…'));
           case AgentConfirmNeeded(:final action):
+            _endStreaming();
             _entries.add(_Entry.confirm(action));
           case AgentError(:final message):
+            _endStreaming();
             _entries.add(_Entry.text(message, isError: true));
+          case AgentTaskCard(:final task):
+            _endStreaming();
+            _entries.add(_Entry.task(task));
         }
       });
     }
-    if (mounted) setState(() => _busy = false);
+    } finally {
+      app?.aiEnd();
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _resolve(_Entry entry, bool approved) async {
@@ -257,6 +300,7 @@ class _AiPanelState extends State<AiPanel> {
   }
 
   Widget _bubble(_Entry e) {
+    if (e.task != null) return _taskCard(e.task!);
     if (e.action != null) {
       return Card(
         margin: const EdgeInsets.symmetric(vertical: 6),
@@ -323,6 +367,74 @@ class _AiPanelState extends State<AiPanel> {
           style: TextStyle(
               fontSize: 13,
               color: e.isError ? AppColors.danger : AppColors.textPrimary),
+        ),
+      ),
+    );
+  }
+
+  /// 批量任务卡片（设计书 4.3.4：任务进度 + 失败可重试）
+  Widget _taskCard(AiTask<List<String>> task) {
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      color: AppColors.panel,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: ListenableBuilder(
+          listenable: task,
+          builder: (context, _) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.batch_prediction,
+                      size: 16, color: AppColors.aiAccent),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(task.title,
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600)),
+                  ),
+                  Text('${task.doneCount}/${task.items.length}',
+                      style: const TextStyle(
+                          fontSize: 12, color: AppColors.textSecondary)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: task.items.isEmpty
+                      ? 0
+                      : task.doneCount / task.items.length,
+                  minHeight: 5,
+                  backgroundColor: Colors.white12,
+                  color: AppColors.aiAccent,
+                ),
+              ),
+              if (task.failedCount > 0) ...[
+                const SizedBox(height: 8),
+                Text('失败 ${task.failedCount} 项',
+                    style: const TextStyle(
+                        fontSize: 12, color: AppColors.danger)),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: task.isFinished
+                        ? () async {
+                            await task.retryFailed();
+                            if (!context.mounted) return;
+                            await AppStateScope.of(context, listen: false)
+                                .library
+                                .flush();
+                          }
+                        : null,
+                    icon: const Icon(Icons.refresh, size: 16),
+                    label: const Text('重试失败项'),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );

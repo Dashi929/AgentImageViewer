@@ -176,6 +176,37 @@ Future<List<ImageEntry>> scanDirectory(String dirPath, {int depth = 4}) async {
   return out;
 }
 
+/// 图库排序方式（设计书 4.3.1 元信息行）。
+enum GallerySort { name, time, size }
+
+/// 按 [sort] 比较两条图库条目（纯函数，可单测）。
+int compareEntries(ImageEntry a, ImageEntry b, GallerySort sort) {
+  switch (sort) {
+    case GallerySort.name:
+      return naturalCompare(a.name, b.name);
+    case GallerySort.time:
+      final c = b.mtimeMs.compareTo(a.mtimeMs); // 新的在前
+      return c != 0 ? c : naturalCompare(a.name, b.name);
+    case GallerySort.size:
+      final c = b.sizeBytes.compareTo(a.sizeBytes); // 大的在前
+      return c != 0 ? c : naturalCompare(a.name, b.name);
+  }
+}
+
+/// 按月份分组（时间维度组织，设计书 2.5）。纯函数，可单测。
+List<({String month, List<ImageEntry> items})> groupByMonth(
+    List<ImageEntry> entries) {
+  final map = <String, List<ImageEntry>>{};
+  for (final e in entries) {
+    final d = DateTime.fromMillisecondsSinceEpoch(e.mtimeMs);
+    final key =
+        '${d.year}-${d.month.toString().padLeft(2, '0')}';
+    map.putIfAbsent(key, () => []).add(e);
+  }
+  final keys = map.keys.toList()..sort((a, b) => b.compareTo(a)); // 新月份在前
+  return [for (final k in keys) (month: k, items: map[k]!)];
+}
+
 /// 生成缩略图任务清单：mtime 变化或无缓存键的条目优先。
 List<ImageEntry> pendingThumbTasks(List<ImageEntry> entries, Set<String> cachedKeys,
     String Function(ImageEntry) keyFor) {

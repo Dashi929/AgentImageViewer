@@ -1,11 +1,13 @@
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:windows_single_instance/windows_single_instance.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
 import 'core/scanner.dart';
+import 'ui/shortcuts_sheet.dart';
 import 'ui/app_shell.dart';
 import 'ui/theme.dart';
 
@@ -43,30 +45,100 @@ Future<void> main() async {
   runApp(AgentImageViewerApp(state: state));
 }
 
-class AgentImageViewerApp extends StatelessWidget {
+class AgentImageViewerApp extends StatefulWidget {
   const AgentImageViewerApp({super.key, required this.state});
 
   final AppState state;
 
   @override
+  State<AgentImageViewerApp> createState() => _AgentImageViewerAppState();
+}
+
+class _AgentImageViewerAppState extends State<AgentImageViewerApp>
+    with WindowListener {
+  @override
+  void initState() {
+    super.initState();
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      windowManager.addListener(this);
+      windowManager.setPreventClose(true); // AI 任务运行中关窗需确认（设计书 3.7）
+    }
+  }
+
+  @override
+  void onWindowClose() async {
+    if (!widget.state.aiBusy) {
+      await windowManager.destroy();
+      return;
+    }
+    final ctx = navigatorKey.currentContext;
+    if (ctx == null || !mounted) {
+      await windowManager.destroy();
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: ctx,
+      builder: (context) => AlertDialog(
+        title: const Text('AI 任务进行中'),
+        content: const Text('仍有 AI 任务在队列或执行中，退出会中断批量任务。确定退出吗？'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消')),
+          FilledButton(
+              style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.danger),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('退出')),
+        ],
+      ),
+    );
+    if (ok == true) await windowManager.destroy();
+  }
+
+  @override
+  void dispose() {
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      windowManager.removeListener(this);
+    }
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return AppStateScope(
-      state: state,
+      state: widget.state,
       child: MaterialApp(
+        navigatorKey: navigatorKey,
         title: 'AgentImageViewer',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.dark(),
-        home: Stack(
-          children: [
-            AppShell(),
-            // 自绘标题栏拖动区 + 窗口控制按钮（仅桌面显示）
-            const _TitleBar(),
-          ],
+        home: CallbackShortcuts(
+          bindings: {
+            // 全局：Ctrl+K 聚焦 AI 面板、? 呼出快捷键速查（设计书 表 5-3）
+            const SingleActivator(LogicalKeyboardKey.keyK, control: true):
+                () => NavigatorStateEx.currentTab.value = NavTab.ai,
+            const SingleActivator(LogicalKeyboardKey.slash, shift: true):
+                () => showShortcutSheet(navigatorKey.currentContext!),
+          },
+          child: Focus(
+            autofocus: true,
+            child: Stack(
+              children: [
+                AppShell(),
+                // 自绘标题栏拖动区 + 窗口控制按钮（仅桌面显示）
+                const _TitleBar(),
+              ],
+            ),
+          ),
         ),
       ),
     );
   }
 }
+
+/// 关窗确认对话框用的全局导航钥匙。
+final navigatorKey = GlobalKey<NavigatorState>();
 
 /// 从进程参数中提取图片路径（跳过 exe 自身与选项）。
 String? extractImagePath(List<String> args) {

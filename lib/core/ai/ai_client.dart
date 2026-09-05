@@ -8,6 +8,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'chat_stream.dart';
+
 /// 一条多模态消息。content 可为纯文本或 文本+图片(base64) 组合。
 class ChatMessage {
   ChatMessage.system(this.text)
@@ -109,12 +111,25 @@ class ChatResponse {
 }
 
 /// 对话后端接口（AgentSession 依赖此抽象，测试可注入桩）。
+/// chatStream 提供一次性回退实现；支持 SSE 的后端应覆写。
 abstract class ChatBackend {
   Future<ChatResponse> chat({
     required List<ChatMessage> messages,
     List<Map<String, Object?>> tools = const [],
     double temperature = 0.4,
   });
+
+  Stream<StreamChunk> chatStream(
+    List<ChatMessage> messages,
+    StreamOptions options,
+  ) async* {
+    final r = await chat(messages: messages, tools: options.tools,
+        temperature: options.temperature);
+    if (r.message.text.isNotEmpty) yield StreamChunk.text(r.message.text);
+    if (r.message.toolCalls.isNotEmpty) {
+      yield StreamChunk.toolCalls(r.message.toolCalls);
+    }
+  }
 
   void dispose();
 }
@@ -225,6 +240,46 @@ class AiClient implements ChatBackend {
     } catch (_) {}
     if (body.length > 200) return '${body.substring(0, 200)}…';
     return body;
+  }
+
+  /// 流式对话（设计书 4.3.4：模型回复流式输出）。
+  /// 逐段 yield 文本增量；流结束若含工具调用，最后 yield 一个 toolCalls chunk。
+  @override
+  Stream<StreamChunk> chatStream(
+    List<ChatMessage> messages,
+    StreamOptions options,
+  ) async* {
+    final body = jsonEncode({
+      'model': config.model,
+      'messages': [for (final m in messages) m.toJson()],
+      if (options.tools.isNotEmpty) 'tools': options.tools,
+      'temperature': options.temperature,
+      'stream': true,
+    });
+
+    final req = await _http.postUrl(_uri);
+    req.headers.set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+    req.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${config.apiKey}');
+    req.headers.set(HttpHeaders.acceptHeader, 'text/event-stream');
+    req.contentLength = utf8.encode(body).length;
+    req.add(utf8.encode(body));
+
+    final resp = await req.close().timeout(config.timeout);
+    if (resp.statusCode != 200) {
+      final text = await resp.transform(utf8.decoder).join();
+      throw AiException(_normalizeError(text), statusCode: resp.statusCode);
+    }
+
+    final acc = SseAccumulator();
+    await for (final line in resp
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())) {
+      final delta = acc.feed(line);
+      if (delta.isNotEmpty) yield StreamChunk.text(delta);
+      if (acc.done) break;
+    }
+    final calls = acc.takeToolCalls();
+    if (calls.isNotEmpty) yield StreamChunk.toolCalls(calls);
   }
 
   @override

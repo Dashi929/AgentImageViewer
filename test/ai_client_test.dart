@@ -131,7 +131,7 @@ void main() {
 }
 
 /// ChatBackend 桩：脚本化决议序列（供 AgentSession 测试使用）
-class FakeChat implements ChatBackend {
+class FakeChat extends ChatBackend {
   FakeChat(this.script);
 
   final List<ChatResponse> script;

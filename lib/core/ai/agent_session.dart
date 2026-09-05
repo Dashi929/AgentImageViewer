@@ -6,15 +6,27 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:agent_image_viewer/core/ai/queue.dart';
+
 import 'ai_client.dart';
 import 'agent_tools.dart';
+import 'chat_stream.dart';
 import 'generative.dart';
+import 'vision_tagger.dart';
 
 sealed class AgentEvent {}
 
 class AgentText extends AgentEvent {
   AgentText(this.text);
   final String text; // 模型回复（整段）
+}
+
+/// 流式文本增量（设计书 4.3.4：模型回复流式输出）。
+/// UI 侧把增量追加到正在生成的气泡；会话结束前的 [AgentText]
+/// 携带完整文本用于收敛。
+class AgentTextDelta extends AgentEvent {
+  AgentTextDelta(this.delta);
+  final String delta;
 }
 
 class AgentToolRun extends AgentEvent {
@@ -31,6 +43,24 @@ class AgentConfirmNeeded extends AgentEvent {
 class AgentError extends AgentEvent {
   AgentError(this.message);
   final String message;
+}
+
+/// 批量任务卡片（设计书 4.3.4：任务卡片展示进度，失败可单独重试）。
+class AgentTaskCard extends AgentEvent {
+  AgentTaskCard(this.task);
+  final AiTask<List<String>> task;
+}
+
+/// 判断是否为批量打标类指令（纯函数，可单测）。
+bool isBatchTagIntent(String text) {
+  final t = text.toLowerCase();
+  final wantsBatch = t.contains('批量') ||
+      t.contains('所有') ||
+      t.contains('全部') ||
+      t.contains('每个') ||
+      t.contains('每张');
+  final wantsTag = t.contains('打标') || t.contains('标签') || t.contains('整理');
+  return wantsBatch && wantsTag;
 }
 
 /// 指令 → 本地滤镜节点 的编译（设计书 ai_edit）。
@@ -68,22 +98,38 @@ class AgentSession {
   ];
 
   Stream<AgentEvent> send(String userText) async* {
+    // 批量打标：不走对话循环，直接构造串行任务队列（逐项容错 + 进度卡片）
+    if (isBatchTagIntent(userText)) {
+      yield* _runBatchTag(userText);
+      return;
+    }
     _history.add(ChatMessage.user(userText));
 
     for (var turn = 0; turn < maxTurns; turn++) {
-      final ChatResponse resp;
+      String acc = '';
+      List<ToolCall>? streamCalls;
       try {
-        resp = await client.chat(messages: _history, tools: [
-          for (final s in tools.specs) s.toOpenAiJson(),
-        ]);
+        await for (final chunk in client.chatStream(
+          _history,
+          StreamOptions(tools: [for (final s in tools.specs) s.toOpenAiJson()]),
+        )) {
+          if (chunk.toolCalls.isNotEmpty) {
+            streamCalls = chunk.toolCalls;
+            break;
+          }
+          if (chunk.textDelta.isNotEmpty) {
+            acc += chunk.textDelta;
+            yield AgentTextDelta(chunk.textDelta);
+          }
+        }
       } catch (e) {
         yield AgentError(e.toString());
         return;
       }
 
-      if (resp.finishReason == 'tool_calls' || resp.message.toolCalls.isNotEmpty) {
-        _history.add(resp.message);
-        for (final call in resp.message.toolCalls) {
+      if (streamCalls != null && streamCalls.isNotEmpty) {
+        _history.add(ChatMessage.assistant(acc, toolCalls: streamCalls));
+        for (final call in streamCalls) {
           yield AgentToolRun(call.name, call.arguments);
           final result = await _executeTool(call);
           if (result.pendingAction != null) {
@@ -99,12 +145,43 @@ class AgentSession {
         continue; // 结果回填后继续推理
       }
 
-      final text = resp.message.text;
-      _history.add(resp.message);
-      if (text.isNotEmpty) yield AgentText(text);
+      _history.add(ChatMessage.assistant(acc));
+      if (acc.isNotEmpty) yield AgentText(acc);
       return;
     }
     yield AgentError('达到最大工具轮次（$maxTurns），任务中止。');
+  }
+
+  /// 批量打标任务：对图库全部图片逐张视觉识别，写入标签与虚拟标题。
+  Stream<AgentEvent> _runBatchTag(String userText) async* {
+    final entries = tools.library.entries;
+    if (entries.isEmpty) {
+      yield AgentError('图库为空，没有可打标的图片。');
+      return;
+    }
+    final tagger = VisionTagger(client);
+    final task = AiTask<List<String>>('批量打标（${entries.length} 张）', [
+      for (final e in entries)
+        TaskItem(e.path, e.displayName, () async {
+          final bytes = await tools.visionImageOfPath(e.path);
+          final r = await tagger.tagImage(bytes);
+          if (r == null) throw Exception('图片读取失败');
+          for (final t in r.tags) {
+            tools.library.addTag(e.path, t);
+          }
+          if (r.title.isNotEmpty) {
+            tools.library.setVirtualName(e.path, r.title);
+          }
+          return r.tags;
+        }),
+    ]);
+    yield AgentTaskCard(task);
+    await task.run();
+    await tools.library.flush();
+    final fail = task.failedCount;
+    yield AgentText(fail == 0
+        ? '批量打标完成：${task.successCount}/${entries.length} 张成功。'
+        : '批量打标完成：成功 ${task.successCount}，失败 $fail（可在任务卡片中重试）。');
   }
 
   Future<AgentToolResult> _executeTool(ToolCall call) async {

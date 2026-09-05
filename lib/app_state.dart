@@ -62,6 +62,17 @@ class AppState extends ChangeNotifier {
   /// 共享 JsonStore（编辑栈等持久化用）。
   JsonStore get store => library.store;
 
+  int _aiRunning = 0;
+
+  /// AI 任务（会话/批量队列）是否运行中——关窗确认依据（设计书 3.7）。
+  bool get aiBusy => _aiRunning > 0;
+
+  void aiStart() => _aiRunning++;
+  void aiEnd() {
+    _aiRunning = (_aiRunning - 1).clamp(0, 1 << 30);
+    notifyListeners();
+  }
+
   /// 外部双击打开的图片：登记进图库并直接进入浏览（设计书 6.1）。
   Future<void> registerExternalOpen(String path) async {
     if (!File(path).existsSync()) return;

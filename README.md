@@ -27,6 +27,7 @@ lib/
 flutter pub get
 flutter analyze   # 零告警基线
 flutter test      # core 层自动化测试
+python tool/gen_bench_images.py && AIV_BENCH=1 flutter test test/bench_test.dart  # 性能基准（本地）
 flutter run -d windows
 ```
 
