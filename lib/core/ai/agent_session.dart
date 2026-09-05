@@ -149,11 +149,13 @@ class AgentSession {
     if (ins.contains('黑白')) add('preset', {'name': 'bw'});
     if (ins.contains('复古')) add('preset', {'name': 'sepia'});
     if (ins.contains('胶片')) add('preset', {'name': 'film'});
-    if (ins.contains('冷调') || ins.contains('冷色')) add('preset', {'name': 'cool'});
-    if (ins.contains('暖调') || ins.contains('暖色')) add('preset', {'name': 'warm'});
     if (ins.contains('日系')) {
       add('preset', {'name': 'cool'});
       add('adjust', {'brightness': 0.06, 'saturation': -0.1});
+    } else if (ins.contains('冷调') || ins.contains('冷色')) {
+      add('preset', {'name': 'cool'});
+    } else if (ins.contains('暖调') || ins.contains('暖色')) {
+      add('preset', {'name': 'warm'});
     }
     if (ins.contains('亮度')) add('adjust', {'brightness': 0.1});
     if (ins.contains('对比')) add('adjust', {'contrast': 0.15});

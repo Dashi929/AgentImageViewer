@@ -5,7 +5,6 @@ import 'dart:typed_data';
 import 'package:agent_image_viewer/core/ai/agent_session.dart';
 import 'package:agent_image_viewer/core/ai/agent_tools.dart';
 import 'package:agent_image_viewer/core/ai/generative.dart';
-import 'package:agent_image_viewer/core/ai/queue.dart';
 import 'package:agent_image_viewer/core/db/json_store.dart';
 import 'package:agent_image_viewer/core/db/library.dart';
 import 'package:agent_image_viewer/core/scanner.dart';
