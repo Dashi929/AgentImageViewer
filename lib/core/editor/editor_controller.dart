@@ -28,7 +28,15 @@ class EditorController extends ChangeNotifier {
     required this.source,
     required this.store,
     ui.Image? previewSource,
-  }) : previewSource = previewSource ?? source;
+  }) : previewSource = previewSource ?? source {
+    _active[imageId] = this;
+  }
+
+  /// 活跃编辑器注册表（UI 事件与测试可达）。
+  static final Map<String, EditorController> _active = {};
+
+  /// @visibleForTesting
+  static EditorController? controllerFor(String imageId) => _active[imageId];
 
   final String imageId;
 
@@ -42,7 +50,7 @@ class EditorController extends ChangeNotifier {
   final ImagePipeline pipeline = ImagePipeline();
 
   ui.Image? _preview;
-  int _previewHash = -1;
+  String _previewHash = '';
 
   /// 当前预览（管线求值结果；无节点时直接复用原图）。
   ui.Image? get preview => _preview;
@@ -94,7 +102,9 @@ class EditorController extends ChangeNotifier {
 
   /// 重算预览：管线未变则跳过；返回是否实际重算。
   Future<bool> recomputePreview() async {
-    final hash = Object.hashAll(pipeline.nodes.map((n) => n.toJson()));
+    // Map.hashCode 是身份哈希：toJson 每次 new Map 会恒变，
+    // 必须用内容稳定的字符串做去重指纹
+    final hash = pipeline.nodes.map((n) => n.toJson().toString()).join('|');
     if (hash == _previewHash && _preview != null) return false;
     _previewHash = hash;
     try {
@@ -141,6 +151,7 @@ class EditorController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _active.remove(imageId);
     if (_preview != null && _preview != previewSource) _preview!.dispose();
     super.dispose();
   }

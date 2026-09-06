@@ -52,15 +52,13 @@ class _EditorPageState extends State<EditorPage> {
     final app = AppStateScope.of(context, listen: false);
     _appRef = app;
     // 源图（导出用全尺寸）+ 预览图（≤2048，滑杆实时求值不卡）
-    final decoded =
-        await app.images.decode(widget.entry.path, widget.entry.mtimeMs);
+    final decoded = await app.images
+        .decode(widget.entry.path, widget.entry.mtimeMs, autoPin: true);
     final previewSrc = await app.images.decode(
         widget.entry.path, widget.entry.mtimeMs,
-        target: 2048);
+        target: 2048, autoPin: true);
     if (!mounted) return;
-    app.images.pin(decoded.cacheKey);
     _pinnedSourceKey = decoded.cacheKey;
-    app.images.pin(previewSrc.cacheKey);
     _pinnedPreviewKey = previewSrc.cacheKey;
 
     final id = widget.entry.path.hashCode.toUnsigned(32).toString();

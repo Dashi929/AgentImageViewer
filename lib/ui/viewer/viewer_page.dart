@@ -103,7 +103,8 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     final vp = _view.viewportW > 0 ? _view.viewportW : 1200;
     final dpr = View.of(context).devicePixelRatio;
     final previewTarget = (vp * dpr).clamp(320, 2048).toInt();
-    final preview = await _app.images.decode(e.path, e.mtimeMs, target: previewTarget);
+    final preview = await _app.images
+        .decode(e.path, e.mtimeMs, target: previewTarget, autoPin: true);
     if (_entry.path != e.path) return;
     _applyDecoded(preview);
     _view.resetForImage(preview.width, preview.height, _view.viewportW, _view.viewportH);
@@ -353,7 +354,6 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
   }
 
   void _applyDecoded(DecodedImage d) {
-    _app.images.pin(d.cacheKey);
     if (_pinnedKey != null) _app.images.unpin(_pinnedKey!);
     _pinnedKey = d.cacheKey;
     _displayImage = d.image;
@@ -922,10 +922,10 @@ class _StripThumbState extends State<_StripThumb> {
     final app = AppStateScope.of(context, listen: false);
     _mgr = app.images;
     try {
-      final d =
-          await app.images.decode(widget.entry.path, widget.entry.mtimeMs, target: 160);
+      final d = await app.images.decode(
+          widget.entry.path, widget.entry.mtimeMs,
+          target: 160, autoPin: true);
       if (mounted) {
-        app.images.pin(d.cacheKey);
         _pinnedKey = d.cacheKey;
         setState(() => _image = d.image);
       }

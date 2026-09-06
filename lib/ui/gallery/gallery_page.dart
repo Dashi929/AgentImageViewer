@@ -327,8 +327,9 @@ class _ThumbCardState extends State<_ThumbCard> {
     final state = AppStateScope.of(context);
     _mgr = state.images;
     final e = widget.entry;
-    _future = state.images.decode(e.path, e.mtimeMs, target: 320).then((d) {
-      state.images.pin(d.cacheKey);
+    _future = state.images
+        .decode(e.path, e.mtimeMs, target: 320, autoPin: true)
+        .then((d) {
       _pinnedKey = d.cacheKey;
       if (e.width == null && d.width > 0) {
         e.width = d.width;

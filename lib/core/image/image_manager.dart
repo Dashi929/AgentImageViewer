@@ -39,6 +39,10 @@ class ImageManager {
   int _usedBytes = 0;
 
   int get usedBytes => _usedBytes;
+  bool isPinned(String key) => _pins.containsKey(key);
+
+  /// @visibleForTesting
+  bool debugHas(String key) => _lru.keys.contains(key);
 
   String _key(String path, int mtimeMs, int target) =>
       '${path.hashCode.toUnsigned(32)}_${mtimeMs}_$target';
@@ -57,10 +61,17 @@ class ImageManager {
   }
 
   /// 全量解码（target=0 原尺寸）或降采样解码（target>0，含缩略图磁盘缓存）。
-  Future<DecodedImage> decode(String path, int mtimeMs, {int target = 0}) async {
+  ///
+  /// [autoPin] 解码/命中后立即钉住：显示方持有期间禁止淘汰释放。
+  /// 必须与 unpin 成对；消除「decode 返回到调用方手动 pin 之间」的竞态淘汰窗口。
+  Future<DecodedImage> decode(String path, int mtimeMs,
+      {int target = 0, bool autoPin = false}) async {
     final key = _key(path, mtimeMs, target);
     final hit = _lru[key];
-    if (hit != null) return hit;
+    if (hit != null) {
+      if (autoPin) pin(key);
+      return hit;
+    }
 
     DecodedImage dec;
     if (target > 0) {
@@ -88,6 +99,8 @@ class ImageManager {
       dec = DecodedImage(key, img, img.width, img.height);
     }
 
+    // 先注册 pin 再入缓存：防止 insert 的预算淘汰在 pin 前选中自己（插入即淘汰）
+    if (autoPin) pin(key);
     _insert(dec);
     return dec;
   }

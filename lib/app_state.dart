@@ -45,6 +45,21 @@ class AppState extends ChangeNotifier {
     return state;
   }
 
+  /// 测试专用构造（绕过 path_provider）。
+  @visibleForTesting
+  factory AppState.forTest(Directory dataDir) {
+    final store = JsonStore(baseDir: dataDir);
+    final library = LibraryIndex(store);
+    final thumbs = Directory(
+        '${dataDir.path}${Platform.pathSeparator}cache'
+        '${Platform.pathSeparator}thumbs');
+    return AppState._(
+      dataDir: dataDir,
+      library: library,
+      images: ImageManager(thumbCacheDir: thumbs),
+    );
+  }
+
   /// 添加监控文件夹并立即扫描入库。
   Future<List<ImageEntry>> addFolder(String path) async {
     await library.addFolder(path);
