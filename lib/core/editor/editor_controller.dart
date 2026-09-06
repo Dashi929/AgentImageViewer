@@ -38,6 +38,9 @@ class EditorController extends ChangeNotifier {
   /// @visibleForTesting
   static EditorController? controllerFor(String imageId) => _active[imageId];
 
+  /// @visibleForTesting
+  static Map<String, EditorController> get activeControllers => _active;
+
   final String imageId;
 
   /// 全尺寸源图（导出合成用）。

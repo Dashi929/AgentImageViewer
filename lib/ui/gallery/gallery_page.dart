@@ -402,13 +402,12 @@ class _ThumbCardState extends State<_ThumbCard> {
                       ),
                     );
                   }
-                  return FittedBox(
+                  // 等比适应卡片（不拉伸）：contain 于卡片缩略区
+                  return RawImage(
+                    image: d.image,
                     fit: BoxFit.contain,
-                    child: RawImage(
-                      image: d.image,
-                      width: d.w.toDouble(),
-                      height: d.h.toDouble(),
-                    ),
+                    width: double.infinity,
+                    height: double.infinity,
                   );
                   },
                 ),

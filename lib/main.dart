@@ -13,6 +13,11 @@ import 'ui/theme.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  await appMain(args);
+}
+
+/// 应用启动主体（集成测试复用）。
+Future<void> appMain(List<String> args) async {
 
   if (!Platform.isAndroid && !Platform.isIOS) {
     await windowManager.ensureInitialized();
@@ -129,12 +134,16 @@ class _AgentImageViewerAppState extends State<AgentImageViewerApp>
           },
           child: Focus(
             autofocus: true,
-            child: Stack(
-              children: [
-                AppShell(),
-                // 自绘标题栏拖动区 + 窗口控制按钮（仅桌面显示）
-                const _TitleBar(),
-              ],
+            child: Scaffold(
+              // 提供 Material 祖先：图库搜索框等 Material 组件必需
+              backgroundColor: AppColors.mainBg,
+              body: Stack(
+                children: [
+                  AppShell(),
+                  // 自绘标题栏拖动区 + 窗口控制按钮（仅桌面显示）
+                  const _TitleBar(),
+                ],
+              ),
             ),
           ),
         ),
