@@ -171,7 +171,7 @@ Future<ui.Image> _apply(ui.Image img, FilterNode n) async {
   }
 }
 
-ui.ColorFilter? _adjustMatrix(Map<String, double> p) {
+ui.ColorFilter? adjustColorFilter(Map<String, double> p) {
   // 4x5 颜色矩阵（RGBA 通道 + 偏移列），依次合成：饱和度 → 对比度 → 亮度/色温
   final b = p['brightness'] ?? 0;
   final c = p['contrast'] ?? 0;
@@ -199,7 +199,7 @@ Future<ui.Image> _applyAdjust(ui.Image img, Map<String, double> p) async {
   final vignette = p['vignette'] ?? 0;
   final base = await _newCanvas(img.width, img.height, (c) {
     final paint = ui.Paint();
-    final filter = _adjustMatrix(p);
+    final filter = adjustColorFilter(p);
     if (filter != null) paint.colorFilter = filter;
     c.drawImage(img, ui.Offset.zero, paint);
 
@@ -221,10 +221,12 @@ Future<ui.Image> _applyAdjust(ui.Image img, Map<String, double> p) async {
   return base;
 }
 
-Future<ui.Image> _applyAnnotate(ui.Image img, Map<String, Object?> params) async {
+/// 在给定画布上按输出尺寸绘制单个标注节点（矢量部分，屏幕/离屏共用）。
+/// 马赛克在屏幕预览下以半透明块近似（导出走离屏精确像素化）。
+void paintAnnotateVectors(ui.Canvas c, ui.Size outSize, Map<String, Object?> params) {
   final kind = params['kind'] as String;
-  final x = (params['x'] as num).toDouble() * img.width;
-  final y = (params['y'] as num).toDouble() * img.height;
+  final x = (params['x'] as num).toDouble() * outSize.width;
+  final y = (params['y'] as num).toDouble() * outSize.height;
   final size = ((params['size'] as num?)?.toDouble() ?? 24);
   final colorValue = ((params['color'] as num?) ?? 0xFFE5615C).toInt();
   final paint = ui.Paint()
@@ -233,78 +235,67 @@ Future<ui.Image> _applyAnnotate(ui.Image img, Map<String, Object?> params) async
     ..strokeWidth =
         ((params['strokeWidth'] as num?)?.toDouble()) ?? math.max(2, size * 0.08).toDouble();
 
-  // 相对比例的第二个点（箭头/矩形/椭圆）
   ui.Offset? end;
   if (params['x2'] is num && params['y2'] is num) {
     end = ui.Offset(
-      (params['x2'] as num).toDouble() * img.width,
-      (params['y2'] as num).toDouble() * img.height,
+      (params['x2'] as num).toDouble() * outSize.width,
+      (params['y2'] as num).toDouble() * outSize.height,
     );
   }
 
+  switch (kind) {
+    case AnnotateKinds.text:
+      final text = (params['text'] as String?) ?? '';
+      final builder = ui.ParagraphBuilder(ui.ParagraphStyle(fontSize: size))
+        ..pushStyle(ui.TextStyle(color: ui.Color(colorValue)))
+        ..addText(text);
+      final para = builder.build()
+        ..layout(ui.ParagraphConstraints(width: outSize.width));
+      c.drawParagraph(para, ui.Offset(x, y));
+    case AnnotateKinds.arrow:
+      if (end != null) {
+        c.drawLine(ui.Offset(x, y), end, paint);
+        final dir = end - ui.Offset(x, y);
+        final len = dir.distance;
+        if (len > 0) {
+          ui.Offset rot(ui.Offset v, double a) => ui.Offset(
+                v.dx * math.cos(a) - v.dy * math.sin(a),
+                v.dx * math.sin(a) + v.dy * math.cos(a),
+              );
+          final u = dir / len;
+          final left = end - rot(u, math.pi / 6) * (size * 0.6);
+          final right = end - rot(u, -math.pi / 6) * (size * 0.6);
+          c.drawLine(end, left, paint);
+          c.drawLine(end, right, paint);
+        }
+      }
+    case AnnotateKinds.rect:
+      if (end != null) {
+        c.drawRect(ui.Rect.fromPoints(ui.Offset(x, y), end), paint);
+      }
+    case AnnotateKinds.ellipse:
+      if (end != null) {
+        c.drawOval(ui.Rect.fromPoints(ui.Offset(x, y), end), paint);
+      }
+    case AnnotateKinds.mosaic:
+      if (end != null) {
+        final rect = ui.Rect.fromPoints(ui.Offset(x, y), end);
+        c.drawRect(rect, ui.Paint()..color = const ui.Color(0x66000000));
+      }
+    case AnnotateKinds.doodle:
+      final pts = (params['points'] as List? ?? [])
+          .map((e) => ui.Offset(
+              ((e as Map)['x'] as num).toDouble() * outSize.width,
+              (e['y'] as num).toDouble() * outSize.height))
+          .toList();
+      for (var i = 1; i < pts.length; i++) {
+        c.drawLine(pts[i - 1], pts[i], paint..strokeCap = ui.StrokeCap.round);
+      }
+  }
+}
+
+Future<ui.Image> _applyAnnotate(ui.Image img, Map<String, Object?> params) async {
   return _newCanvas(img.width, img.height, (c) {
-    switch (kind) {
-      case AnnotateKinds.text:
-        final text = (params['text'] as String?) ?? '';
-        final builder = ui.ParagraphBuilder(ui.ParagraphStyle(fontSize: size))
-          ..pushStyle(ui.TextStyle(color: ui.Color(colorValue)))
-          ..addText(text);
-        final para = builder.build()
-          ..layout(ui.ParagraphConstraints(width: img.width.toDouble()));
-        c.drawParagraph(para, ui.Offset(x, y));
-      case AnnotateKinds.arrow:
-        if (end != null) {
-          c.drawLine(ui.Offset(x, y), end, paint);
-          final dir = end - ui.Offset(x, y);
-          final len = dir.distance;
-          if (len > 0) {
-            ui.Offset rot(ui.Offset v, double a) => ui.Offset(
-                  v.dx * math.cos(a) - v.dy * math.sin(a),
-                  v.dx * math.sin(a) + v.dy * math.cos(a),
-                );
-            final u = dir / len;
-            final left = end - rot(u, math.pi / 6) * (size * 0.6);
-            final right = end - rot(u, -math.pi / 6) * (size * 0.6);
-            c.drawLine(end, left, paint);
-            c.drawLine(end, right, paint);
-          }
-        }
-      case AnnotateKinds.rect:
-        if (end != null) {
-          c.drawRect(ui.Rect.fromPoints(ui.Offset(x, y), end), paint);
-        }
-      case AnnotateKinds.ellipse:
-        if (end != null) {
-          c.drawOval(ui.Rect.fromPoints(ui.Offset(x, y), end), paint);
-        }
-      case AnnotateKinds.mosaic:
-        if (end != null) {
-          final rect = ui.Rect.fromPoints(ui.Offset(x, y), end);
-          // 区域像素化：把区域按块采样后放大绘制（FilterQuality.none 出马赛克效果）
-          const blocks = 24.0;
-          final cell = math.max(1.0, rect.width / blocks);
-          for (var bx = rect.left; bx < rect.right; bx += cell) {
-            for (var by = rect.top; by < rect.bottom; by += cell) {
-              final sampleX = math.min(bx + cell / 2, img.width - 1.0);
-              final sampleY = math.min(by + cell / 2, img.height - 1.0);
-              c.drawImageRect(
-                  img,
-                  ui.Rect.fromLTWH(sampleX, sampleY, 1, 1),
-                  ui.Rect.fromLTWH(bx, by, math.min(cell, rect.right - bx),
-                      math.min(cell, rect.bottom - by)),
-                  ui.Paint()..filterQuality = ui.FilterQuality.none);
-            }
-          }
-        }
-      case AnnotateKinds.doodle:
-        final pts = (params['points'] as List? ?? [])
-            .map((e) => ui.Offset(
-                ((e as Map)['x'] as num).toDouble() * img.width,
-                (e['y'] as num).toDouble() * img.height))
-            .toList();
-        for (var i = 1; i < pts.length; i++) {
-          c.drawLine(pts[i - 1], pts[i], paint..strokeCap = ui.StrokeCap.round);
-        }
-    }
+    paintAnnotateVectors(c, ui.Size(img.width.toDouble(), img.height.toDouble()), params);
   });
 }

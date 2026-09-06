@@ -6,7 +6,9 @@
 /// - 只有真正被淘汰的条目才 dispose 位图句柄。
 library;
 
+import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import '../pipeline/source.dart';
@@ -157,6 +159,24 @@ class ImageManager {
               '${thumbCacheKey(path, mtimeMs, target)}.png')
           .writeAsBytes(data.buffer.asUint8List(), flush: true);
     } catch (_) {/* 缓存写失败不影响主流程 */}
+  }
+
+  /// 把位图重建为 software 位图（像素可被 toImageSync 离屏画布读取）。
+  /// Android/Windows 解码器默认 hardware 位图，绘制进 toImageSync 画布会画黑。
+  static Future<ui.Image> toSoftwareImage(ui.Image img) async {
+    final data =
+        await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (data == null) return img;
+    final buffer = Uint8List.view(data.buffer);
+    final completer = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      buffer,
+      img.width,
+      img.height,
+      ui.PixelFormat.rgba8888,
+      completer.complete,
+    );
+    return completer.future;
   }
 
   /// 一键重建缩略图缓存（设置页入口）。

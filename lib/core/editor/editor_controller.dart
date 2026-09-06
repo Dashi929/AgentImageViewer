@@ -114,7 +114,19 @@ class EditorController extends ChangeNotifier {
       _preview = pipeline.nodes.isEmpty
           ? previewSource
           : await renderPipeline(previewSource, pipeline.nodes);
-    } catch (_) {
+      assert(() {
+        // ignore: avoid_print
+        print('[editor] rendered ${pipeline.nodes.length} nodes -> '
+            'preview ${_preview!.width}x${_preview!.height} (src '
+            '${previewSource.width}x${previewSource.height})');
+        return true;
+      }());
+    } catch (e) {
+      assert(() {
+        // ignore: avoid_print
+        print('[editor] render FAILED: $e');
+        return true;
+      }());
       return false; // 渲染失败保持旧预览，不让 UI 线程崩掉
     }
     notifyListeners();

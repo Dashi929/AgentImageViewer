@@ -10,7 +10,9 @@ import 'package:flutter/services.dart';
 
 import '../../app_state.dart';
 import '../../core/editor/editor_controller.dart';
+import '../../core/image/image_manager.dart' show ImageManager;
 import '../../core/pipeline/node.dart';
+import '../../core/pipeline/preview_painter.dart';
 import 'dart:ui' as ui;
 
 import '../../core/pipeline/render.dart';
@@ -54,18 +56,25 @@ class _EditorPageState extends State<EditorPage> {
     // 源图（导出用全尺寸）+ 预览图（≤2048，滑杆实时求值不卡）
     final decoded = await app.images
         .decode(widget.entry.path, widget.entry.mtimeMs, autoPin: true);
-    final previewSrc = await app.images.decode(
+    // 预览级不超过原图尺寸：解码器 upscale（target 大于原图）在部分平台产生损坏位图
+    final previewTarget =
+        math.min(2048, math.max(decoded.width, decoded.height));
+    final previewDecoded = await app.images.decode(
         widget.entry.path, widget.entry.mtimeMs,
-        target: 2048, autoPin: true);
+        target: previewTarget, autoPin: true);
+    if (!mounted) return;
+    // 关键：重建为 software 位图，否则硬件位图画进 toImageSync 画布会全黑
+    final previewImg =
+        await ImageManager.toSoftwareImage(previewDecoded.image);
     if (!mounted) return;
     _pinnedSourceKey = decoded.cacheKey;
-    _pinnedPreviewKey = previewSrc.cacheKey;
+    _pinnedPreviewKey = previewDecoded.cacheKey;
 
     final id = widget.entry.path.hashCode.toUnsigned(32).toString();
     final ctrl = EditorController(
       imageId: id,
       source: decoded.image,
-      previewSource: previewSrc.image,
+      previewSource: previewImg,
       store: app.store,
     );
     await ctrl.loadStack();
@@ -325,19 +334,45 @@ class _EditorPageState extends State<EditorPage> {
           body: ListenableBuilder(
             listenable: ctrl,
             builder: (context, _) {
+              // 窄屏（手机竖屏）：画布优先，工具与属性移到底部（设计书 4.5）
+              final wide = MediaQuery.of(context).size.width >= 620;
+              if (wide) {
+                return Column(
+                  children: [
+                    _topBar(ctrl),
+                    const Divider(height: 1),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          _toolbox(ctrl),
+                          const VerticalDivider(width: 1),
+                          Expanded(child: _canvas(ctrl)),
+                          const VerticalDivider(width: 1),
+                          _propsPanel(ctrl),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              }
               return Column(
                 children: [
                   _topBar(ctrl),
                   const Divider(height: 1),
-                  Expanded(
-                    child: Row(
-                      children: [
-                        _toolbox(ctrl),
-                        const VerticalDivider(width: 1),
-                        Expanded(child: _canvas(ctrl)),
-                        const VerticalDivider(width: 1),
-                        _propsPanel(ctrl),
-                      ],
+                  Expanded(child: _canvas(ctrl)),
+                  const Divider(height: 1),
+                  SizedBox(
+                    height: 168,
+                    child: SingleChildScrollView(
+                      child: _propsPanel(ctrl, wide: false),
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  SizedBox(
+                    height: 64,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(children: _toolboxItems(ctrl)),
                     ),
                   ),
                 ],
@@ -390,7 +425,7 @@ class _EditorPageState extends State<EditorPage> {
     );
   }
 
-  Widget _toolbox(EditorController ctrl) {
+  List<Widget> _toolboxItems(EditorController ctrl) {
     Widget toolBtn(_Tool t, IconData icon, String label) {
       final selected = _tool == t;
       return Padding(
@@ -427,17 +462,23 @@ class _EditorPageState extends State<EditorPage> {
       );
     }
 
+    return [
+      toolBtn(_Tool.crop, Icons.crop, '裁剪'),
+      toolBtn(_Tool.adjust, Icons.tune, '调整'),
+      toolBtn(_Tool.preset, Icons.filter_vintage, '滤镜'),
+      toolBtn(_Tool.annotate, Icons.edit, '标注'),
+      toolBtn(_Tool.resize, Icons.photo_size_select_large, '尺寸'),
+    ];
+  }
+
+  Widget _toolbox(EditorController ctrl) {
     return Container(
       width: 68,
       color: AppColors.panel,
       child: Column(
         children: [
           const SizedBox(height: 8),
-          toolBtn(_Tool.crop, Icons.crop, '裁剪'),
-          toolBtn(_Tool.adjust, Icons.tune, '调整'),
-          toolBtn(_Tool.preset, Icons.filter_vintage, '滤镜'),
-          toolBtn(_Tool.annotate, Icons.edit, '标注'),
-          toolBtn(_Tool.resize, Icons.photo_size_select_large, '尺寸'),
+          ..._toolboxItems(ctrl),
         ],
       ),
     );
@@ -468,11 +509,11 @@ class _EditorPageState extends State<EditorPage> {
         child: Stack(
           children: [
             Center(
-              child: RawImage(
-                image: preview,
-                width: drawW,
-                height: drawH,
-                fit: BoxFit.fill,
+              // 屏幕直绘：源位图 + 节点矢量叠加（无中间位图，绕开离屏显示问题）
+              child: CustomPaint(
+                size: Size(drawW, drawH),
+                painter: EditorPreviewPainter(
+                    source: ctrl.previewSource, nodes: ctrl.pipeline.nodes),
               ),
             ),
             // 透明棋盘格底（4.3.3）：由画布背景承担
@@ -502,9 +543,9 @@ class _EditorPageState extends State<EditorPage> {
     );
   }
 
-  Widget _propsPanel(EditorController ctrl) {
+  Widget _propsPanel(EditorController ctrl, {bool wide = true}) {
     return Container(
-      width: 240,
+      width: wide ? 240 : double.infinity,
       color: AppColors.panel,
       padding: const EdgeInsets.all(14),
       child: switch (_tool) {
@@ -796,3 +837,4 @@ class _FreeRotateControlState extends State<_FreeRotateControl> {
     );
   }
 }
+

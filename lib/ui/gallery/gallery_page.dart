@@ -254,9 +254,14 @@ class _Toolbar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-      child: Row(
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minWidth: MediaQuery.of(context).size.width - 32),
+          child: Row(
         children: [
-          Expanded(
+          SizedBox(
+            width: 280,
             child: TextField(
               onChanged: onQuery,
               controller: TextEditingController(text: query),
@@ -282,6 +287,8 @@ class _Toolbar extends StatelessWidget {
                 style: TextStyle(color: AppColors.aiAccent.withValues(alpha: 0.5))),
           ),
         ],
+      ),
+        ),
       ),
     );
   }
