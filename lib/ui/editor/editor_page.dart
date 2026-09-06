@@ -29,9 +29,12 @@ class EditorPage extends StatefulWidget {
 }
 
 class _EditorPageState extends State<EditorPage> {
+  AppState? _appRef;
   EditorController? _controller;
   _Tool _tool = _Tool.adjust;
   String _annotateKind = AnnotateKinds.rect;
+  String? _pinnedSourceKey; // 源图钉住：编辑期间禁止 LRU 淘汰释放
+  String? _pinnedPreviewKey;
 
   // 裁剪/标注的拖拽状态（画布坐标，导出时换算相对比例）
   Offset? _dragStart;
@@ -47,15 +50,28 @@ class _EditorPageState extends State<EditorPage> {
 
   Future<void> _initController() async {
     final app = AppStateScope.of(context, listen: false);
-    final decoded = await app.images.decode(widget.entry.path, widget.entry.mtimeMs);
+    _appRef = app;
+    // 源图（导出用全尺寸）+ 预览图（≤2048，滑杆实时求值不卡）
+    final decoded =
+        await app.images.decode(widget.entry.path, widget.entry.mtimeMs);
+    final previewSrc = await app.images.decode(
+        widget.entry.path, widget.entry.mtimeMs,
+        target: 2048);
     if (!mounted) return;
+    app.images.pin(decoded.cacheKey);
+    _pinnedSourceKey = decoded.cacheKey;
+    app.images.pin(previewSrc.cacheKey);
+    _pinnedPreviewKey = previewSrc.cacheKey;
+
     final id = widget.entry.path.hashCode.toUnsigned(32).toString();
     final ctrl = EditorController(
       imageId: id,
       source: decoded.image,
+      previewSource: previewSrc.image,
       store: app.store,
     );
     await ctrl.loadStack();
+    if (!mounted) return;
     setState(() => _controller = ctrl);
     ctrl.addListener(_onPipelineChanged);
     await ctrl.recomputePreview();
@@ -69,6 +85,11 @@ class _EditorPageState extends State<EditorPage> {
   void dispose() {
     _controller?.removeListener(_onPipelineChanged);
     _controller?.dispose();
+    final app = _appRef;
+    final k1 = _pinnedSourceKey;
+    if (k1 != null) app?.images.unpin(k1);
+    final k2 = _pinnedPreviewKey;
+    if (k2 != null) app?.images.unpin(k2);
     super.dispose();
   }
 

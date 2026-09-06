@@ -80,6 +80,19 @@ void main() {
     expect(await File(target).readAsBytes(), [9, 9]);
   });
 
+  test('预览用 previewSource，导出仍用全尺寸 source', () async {
+    final store = JsonStore(baseDir: tmp);
+    final src = await _solid(3000, 2000, 0xFF204080);
+    final prev = await _solid(1500, 1000, 0xFF204080);
+    final c = EditorController(
+        imageId: 'p', source: src, store: store, previewSource: prev);
+    await c.recomputePreview();
+    expect(c.preview!.width, 1500, reason: '预览按 previewSource 求值');
+    final png = await c.exportBytes(ExportFormat.png);
+    expect((png.width, png.height), (3000, 2000), reason: '导出走全尺寸 source');
+    c.dispose();
+  });
+
   test('recomputePreview：管线未变不重算，变更后预览尺寸正确', () async {
     final store = JsonStore(baseDir: tmp);
     final src = await _solid(64, 32, 0xFF204080);

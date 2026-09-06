@@ -27,10 +27,17 @@ class EditorController extends ChangeNotifier {
     required this.imageId,
     required this.source,
     required this.store,
-  });
+    ui.Image? previewSource,
+  }) : previewSource = previewSource ?? source;
 
   final String imageId;
+
+  /// 全尺寸源图（导出合成用）。
   final ui.Image source;
+
+  /// 预览源图（≤2048，滑杆实时求值用，避免大图卡顿）。
+  final ui.Image previewSource;
+
   final JsonStore store;
   final ImagePipeline pipeline = ImagePipeline();
 
@@ -90,9 +97,13 @@ class EditorController extends ChangeNotifier {
     final hash = Object.hashAll(pipeline.nodes.map((n) => n.toJson()));
     if (hash == _previewHash && _preview != null) return false;
     _previewHash = hash;
-    _preview = pipeline.nodes.isEmpty
-        ? source
-        : await renderPipeline(source, pipeline.nodes);
+    try {
+      _preview = pipeline.nodes.isEmpty
+          ? previewSource
+          : await renderPipeline(previewSource, pipeline.nodes);
+    } catch (_) {
+      return false; // 渲染失败保持旧预览，不让 UI 线程崩掉
+    }
     notifyListeners();
     return true;
   }
@@ -130,7 +141,7 @@ class EditorController extends ChangeNotifier {
 
   @override
   void dispose() {
-    if (_preview != null && _preview != source) _preview!.dispose();
+    if (_preview != null && _preview != previewSource) _preview!.dispose();
     super.dispose();
   }
 }
