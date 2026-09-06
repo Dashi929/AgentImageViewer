@@ -113,6 +113,15 @@ void main() {
           'x2': 0.5,
           'y2': 0.5,
         }),
+        // 回归：涂鸦节点无 x/y 锚点，渲染不得抛 Null 转型异常
+        FilterNode(op: 'annotate', params: {
+          'kind': 'doodle',
+          'points': [
+            {'x': 0.1, 'y': 0.1},
+            {'x': 0.3, 'y': 0.4},
+            {'x': 0.6, 'y': 0.2},
+          ],
+        }),
         FilterNode(op: 'annotate', params: {
           'kind': 'mosaic',
           'x': 0.5,

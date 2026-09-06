@@ -242,8 +242,6 @@ Future<ui.Image> _applyAdjust(ui.Image img, Map<String, double> p) async {
 /// 马赛克在屏幕预览下以半透明块近似（导出走离屏精确像素化）。
 void paintAnnotateVectors(ui.Canvas c, ui.Size outSize, Map<String, Object?> params) {
   final kind = params['kind'] as String;
-  final x = (params['x'] as num).toDouble() * outSize.width;
-  final y = (params['y'] as num).toDouble() * outSize.height;
   final size = ((params['size'] as num?)?.toDouble() ?? 24);
   final colorValue = ((params['color'] as num?) ?? 0xFFE5615C).toInt();
   final paint = ui.Paint()
@@ -251,6 +249,28 @@ void paintAnnotateVectors(ui.Canvas c, ui.Size outSize, Map<String, Object?> par
     ..style = ui.PaintingStyle.stroke
     ..strokeWidth =
         ((params['strokeWidth'] as num?)?.toDouble()) ?? math.max(2, size * 0.08).toDouble();
+
+  // 涂鸦只有 points 路径点（无 x/y 锚点），优先处理并返回
+  if (kind == AnnotateKinds.doodle) {
+    final pts = (params['points'] as List? ?? [])
+        .map((e) => ui.Offset(
+            ((e as Map)['x'] as num?)?.toDouble() ?? 0,
+            ((e)['y'] as num?)?.toDouble() ?? 0))
+        .toList();
+    final stroke = ui.Paint()
+      ..color = ui.Color(colorValue)
+      ..style = ui.PaintingStyle.stroke
+      ..strokeCap = ui.StrokeCap.round
+      ..strokeWidth = paint.strokeWidth;
+    for (var i = 1; i < pts.length; i++) {
+      c.drawLine(pts[i - 1], pts[i], stroke);
+    }
+    return;
+  }
+
+  // 其余类型：x/y 锚点（容错缺失，缺失按 0 处理不抛帧异常）
+  final x = ((params['x'] as num?) ?? 0).toDouble() * outSize.width;
+  final y = ((params['y'] as num?) ?? 0).toDouble() * outSize.height;
 
   ui.Offset? end;
   if (params['x2'] is num && params['y2'] is num) {

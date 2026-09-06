@@ -83,10 +83,10 @@ class ImageManager {
             fromCache: true);
       } else {
         final bytes = await File(path).readAsBytes();
+        // 只约束宽度：同时给 targetWidth/Height 会强制精确尺寸（非等比变形）
         final codec = await ui.instantiateImageCodec(
           bytes,
           targetWidth: target,
-          targetHeight: target,
         );
         final frame = await codec.getNextFrame();
         final img = frame.image;

@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 
 import '../../app_state.dart';
 import '../../core/editor/editor_controller.dart';
+import '../../core/image/image_manager.dart';
 import '../../core/pipeline/node.dart';
 import '../../core/pipeline/preview_painter.dart';
 import 'dart:ui' as ui;
@@ -57,11 +58,17 @@ class _EditorPageState extends State<EditorPage> {
         .decode(widget.entry.path, widget.entry.mtimeMs, autoPin: true);
     if (!mounted) return;
     _pinnedSourceKey = decoded.cacheKey;
+    // 关键：重建为 software 位图——CustomPaint.drawImage 对解码器产出的
+    // GPU 位图在 Impeller(Windows/Android) 上绘制失败(灰/黑画布)，
+    // 而 RawImage 路径正常；CPU 位图两条路径都正常。
+    final softwareSource =
+        await ImageManager.toSoftwareImage(decoded.image);
+    if (!mounted) return;
 
     final id = widget.entry.path.hashCode.toUnsigned(32).toString();
     final ctrl = EditorController(
       imageId: id,
-      source: decoded.image,
+      source: softwareSource,
       store: app.store,
     );
     await ctrl.loadStack();
