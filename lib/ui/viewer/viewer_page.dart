@@ -17,7 +17,6 @@ import '../../core/image/image_manager.dart';
 import '../../core/scanner.dart';
 import '../../core/viewer/slideshow.dart';
 import '../../core/viewer/viewer_state.dart';
-import '../../platform/trash.dart';
 import '../shortcuts_sheet.dart';
 import '../theme.dart';
 
@@ -210,23 +209,37 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
+  /// Del：从图库移除当前图（虚拟删除，本地文件保留，设计书 5.3）。
   Future<void> _deleteCurrent() async {
     final path = _entry.path;
-    final ok = await moveToRecycleBin(path);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('从图库删除'),
+        content: const Text('仅从图库移除此图，不删除本地文件。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('删除')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    _app.library.hideEntry(path);
+    await _app.library.flush();
     if (!mounted) return;
-    if (ok) {
-      await _app.library.rescan();
-      _showOsd('已移入回收站');
-      // 从当前列表移除；若空则回图库
-      widget.list.removeWhere((e) => e.path == path);
-      if (widget.list.isEmpty) {
-        NavigatorStateEx.closeViewer();
-      } else if (_nav.index >= widget.list.length) {
-        _nav.last();
-        _openCurrent();
-      }
+    _showOsd('已从图库移除（本地文件保留）');
+    _app.refreshGallery();
+    // 从当前列表移除并接续显示；若空则回图库
+    widget.list.removeWhere((e) => e.path == path);
+    if (widget.list.isEmpty) {
+      NavigatorStateEx.closeViewer();
     } else {
-      _showOsd('移入回收站失败');
+      if (_nav.index >= widget.list.length) _nav.last();
+      _openCurrent();
     }
   }
 
@@ -754,6 +767,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
             NavigatorStateEx.editor.value = _entry;
           }),
           _barBtn(Icons.info_outline, '信息 (I)', _toggleInfo),
+          _barBtn(Icons.delete_outline, '从图库删除 (Del)', _deleteCurrent),
           const VerticalDivider(width: 12, indent: 12, endIndent: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),

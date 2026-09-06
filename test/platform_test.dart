@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:agent_image_viewer/platform/file_assoc.dart';
-import 'package:agent_image_viewer/platform/trash.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -61,15 +60,6 @@ void main() {
         extensions: ['jpg'],
       );
       expect(cmds.map((c) => c.join(' ')).join(), contains('.jpg'));
-    });
-  });
-
-  group('回收站命令构建（纯函数）', () {
-    test('路径被安全转义并指定 SendToRecycleBin', () {
-      final cmd = buildRecycleCommand(r"C:\pics\my 'photo'.jpg").join(' ');
-      expect(cmd, contains("my ''photo''"));
-      expect(cmd, contains('SendToRecycleBin'));
-      expect(cmd, isNot(contains('PermanentlyDelete')));
     });
   });
 

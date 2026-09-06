@@ -1,6 +1,7 @@
-/// 编辑器控制器：管道 + 预览求值 + 历史持久化（设计书 2.3/4.3.3）。
+/// 编辑器控制器：管道 + 预览求值（设计书 2.3/4.3.3）。
 ///
-/// 非破坏性：原图字节永不修改；操作栈随编辑自动保存（中途退出不丢失）。
+/// 非破坏性：原图字节永不修改；编辑历史仅存于内存，退出编辑即丢弃
+/// （需要保留结果请导出）。
 library;
 
 import 'dart:io';
@@ -9,7 +10,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as imgpkg;
 
-import '../db/json_store.dart';
 import '../pipeline/node.dart';
 import '../pipeline/pipeline.dart';
 import '../pipeline/render.dart';
@@ -23,11 +23,7 @@ class ExportResult {
 }
 
 class EditorController extends ChangeNotifier {
-  EditorController({
-    required this.imageId,
-    required this.source,
-    required this.store,
-  }) {
+  EditorController({required this.imageId, required this.source}) {
     _active[imageId] = this;
   }
 
@@ -45,43 +41,22 @@ class EditorController extends ChangeNotifier {
   /// 全尺寸源图（屏幕直绘与导出合成用）。
   final ui.Image source;
 
-  final JsonStore store;
   final ImagePipeline pipeline = ImagePipeline();
 
   /// 预览代数：节点/历史每次变化 +1，驱动画布 painter 重绘。
   int generation = 0;
   bool get dirty => pipeline.toJson().isNotEmpty;
 
-  /// 加载持久化的操作栈（进入编辑时调用）。
-  Future<void> loadStack() async {
-    final data = await store.loadEditStack(imageId);
-    if (data != null) {
-      try {
-        pipeline.reset(
-          [for (final op in (data['ops'] as List? ?? [])) FilterNode.fromJson((op as Map).cast<String, Object?>())],
-        );
-      } catch (_) {
-        pipeline.reset(null); // 栈损坏按无编辑处理，不阻塞打开
-      }
-    }
-  }
-
-  Future<void> saveStack() async {
-    await store.saveEditStack(imageId, pipeline.toJson());
-  }
-
   Future<void> addNode(FilterNode node) async {
     pipeline.add(node);
     generation++;
     notifyListeners();
-    await saveStack();
   }
 
   Future<void> undo() async {
     if (pipeline.undo()) {
       generation++;
       notifyListeners();
-      await saveStack();
     }
   }
 
@@ -89,7 +64,6 @@ class EditorController extends ChangeNotifier {
     if (pipeline.redo()) {
       generation++;
       notifyListeners();
-      await saveStack();
     }
   }
 
@@ -97,7 +71,6 @@ class EditorController extends ChangeNotifier {
     pipeline.reset(null);
     generation++;
     notifyListeners();
-    await saveStack();
   }
 
   /// 导出合成：整栈一次性求值到目标像素（设计书 2.3）。

@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:agent_image_viewer/core/pipeline/node.dart';
@@ -58,6 +59,15 @@ void main() {
       expect(sizeAfter([FilterNode(op: 'resize', params: {'height': 100})], 800, 400),
           (w: 200, h: 100));
       expect(sizeAfter(const [], 0, 0), (w: 1, h: 1));
+    });
+
+    test('rotate 180/270 尺寸推演：180 不交换、270 交换', () {
+      expect(sizeAfter([FilterNode(op: 'rotate', params: {'deg': 180})], 2000, 1000),
+          (w: 2000, h: 1000), reason: '180° 不交换宽高');
+      expect(sizeAfter([FilterNode(op: 'rotate', params: {'deg': 270})], 2000, 1000),
+          (w: 1000, h: 2000));
+      expect(sizeAfter([FilterNode(op: 'rotate', params: {'deg': -90})], 2000, 1000),
+          (w: 1000, h: 2000));
     });
   });
 
@@ -148,5 +158,80 @@ void main() {
       ]);
       expect(src.width, 64, reason: '原图不被修改');
     });
+
+    test('rotate 90 内容方位正确：左红右蓝 → 上红下蓝', () async {
+      final src = await _twoTone(64, 32, horizontal: true);
+      final out = await renderPipeline(
+          src, [FilterNode(op: 'rotate', params: {'deg': 90})]);
+      expect((out.width, out.height), (32, 64));
+      final px = await _pixels(out);
+      expect(_at(px, out.width, 8, 8), _red, reason: '上半应为红（源左半）');
+      expect(_at(px, out.width, 24, 8), _red);
+      expect(_at(px, out.width, 8, 56), _blue, reason: '下半应为蓝（源右半）');
+      expect(_at(px, out.width, 24, 56), _blue);
+    });
+
+    test('rotate 180 内容方位正确：上红下蓝 → 上蓝下红，尺寸不变', () async {
+      final src = await _twoTone(40, 30, horizontal: false);
+      final out = await renderPipeline(
+          src, [FilterNode(op: 'rotate', params: {'deg': 180})]);
+      expect((out.width, out.height), (40, 30));
+      final px = await _pixels(out);
+      expect(_at(px, out.width, 20, 4), _blue, reason: '180° 后上蓝');
+      expect(_at(px, out.width, 20, 26), _red, reason: '180° 后下红');
+    });
+
+    test('flip 垂直/水平镜像内容正确且不越出画布', () async {
+      final vSrc = await _twoTone(40, 30, horizontal: false);
+      final vOut = await renderPipeline(
+          vSrc, [FilterNode(op: 'flip', params: {'axis': 'v'})]);
+      expect((vOut.width, vOut.height), (40, 30));
+      final vpx = await _pixels(vOut);
+      expect(_at(vpx, vOut.width, 20, 4), _blue, reason: '垂直翻转后上蓝');
+      expect(_at(vpx, vOut.width, 20, 26), _red, reason: '垂直翻转后下红');
+
+      final hSrc = await _twoTone(40, 30, horizontal: true);
+      final hOut = await renderPipeline(
+          hSrc, [FilterNode(op: 'flip', params: {'axis': 'h'})]);
+      final hpx = await _pixels(hOut);
+      expect(_at(hpx, hOut.width, 4, 15), _blue, reason: '水平翻转后左蓝');
+      expect(_at(hpx, hOut.width, 36, 15), _red, reason: '水平翻转后右红');
+    });
   });
+}
+
+const _red = 0xFFE60000;
+const _blue = 0xFF0000E6;
+
+/// 双色测试图：horizontal=true 左红右蓝（按 x 分），否则上红下蓝（按 y 分）。
+Future<ui.Image> _twoTone(int w, int h, {required bool horizontal}) async {
+  final rec = ui.PictureRecorder();
+  final c = ui.Canvas(rec, ui.Offset.zero & ui.Size(w.toDouble(), h.toDouble()));
+  final split = horizontal ? w / 2 : h / 2;
+  c.drawRect(
+      ui.Offset.zero &
+          (horizontal
+              ? ui.Size(split, h.toDouble())
+              : ui.Size(w.toDouble(), split)),
+      ui.Paint()..color = const ui.Color(_red));
+  c.drawRect(
+      (horizontal
+              ? ui.Offset(split, 0)
+              : ui.Offset(0, split)) &
+          (horizontal
+              ? ui.Size(w - split, h.toDouble())
+              : ui.Size(w.toDouble(), h - split)),
+      ui.Paint()..color = const ui.Color(_blue));
+  return rec.endRecording().toImage(w, h);
+}
+
+Future<Uint8List> _pixels(ui.Image img) async {
+  final d = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+  return d!.buffer.asUint8List();
+}
+
+/// 取像素并打包为 AARRGGBB（rawRgba 字节序为 R,G,B,A）。
+int _at(Uint8List px, int w, int x, int y) {
+  final i = (y * w + x) * 4;
+  return (px[i + 3] << 24) | (px[i] << 16) | (px[i + 1] << 8) | px[i + 2];
 }

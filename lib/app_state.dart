@@ -63,10 +63,7 @@ class AppState extends ChangeNotifier {
   /// 添加监控文件夹并立即扫描入库。
   Future<List<ImageEntry>> addFolder(String path) async {
     await library.addFolder(path);
-    final entries = await scanDirectory(path);
-    library.upsertAll(entries);
-    await library.flush();
-    return entries;
+    return library.scanFolderInto(path);
   }
 
   Future<void> rescan() async {

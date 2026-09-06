@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:agent_image_viewer/core/editor/editor_controller.dart';
-import 'package:agent_image_viewer/core/db/json_store.dart';
 import 'package:agent_image_viewer/core/pipeline/node.dart';
 import 'package:agent_image_viewer/core/pipeline/preview_painter.dart';
 import 'package:agent_image_viewer/core/image/image_manager.dart';
@@ -33,7 +32,6 @@ void main() {
     final c = EditorController(
       imageId: 'annot-regression',
       source: src,
-      store: JsonStore(baseDir: tmp),
     );
     addTearDown(c.dispose);
 

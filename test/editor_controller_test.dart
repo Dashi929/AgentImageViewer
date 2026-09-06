@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:agent_image_viewer/core/editor/editor_controller.dart';
-import 'package:agent_image_viewer/core/db/json_store.dart';
 import 'package:agent_image_viewer/core/pipeline/node.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -28,22 +27,27 @@ void main() {
   });
   tearDown(() => deleteDirWithRetry(tmp));
 
-  test('操作栈自动持久化：重开编辑器后历史恢复', () async {
-    final store = JsonStore(baseDir: tmp);
+  test('编辑历史不持久化：不落盘，重开编辑器从空白开始', () async {
     final src = await _solid(50, 50, 0xFF204080);
-    final c1 = EditorController(imageId: 'img7', source: src, store: store);
+    final c1 = EditorController(imageId: 'img7', source: src);
     await c1.addNode(FilterNode(op: Ops.adjust, params: {'brightness': 0.2}));
     await c1.addNode(FilterNode(op: Ops.preset, params: {'name': 'bw'}));
+    expect(c1.pipeline.nodes.map((n) => n.op).toList(), ['adjust', 'preset']);
+    c1.dispose();
 
-    final c2 = EditorController(imageId: 'img7', source: src, store: store);
-    await c2.loadStack();
-    expect(c2.pipeline.nodes.map((n) => n.op).toList(), ['adjust', 'preset']);
+    // 退出后重开（新控制器）：历史不恢复
+    final c2 = EditorController(imageId: 'img7', source: src);
+    addTearDown(c2.dispose);
+    expect(c2.pipeline.nodes, isEmpty);
+    expect(Directory('${tmp.path}${Platform.pathSeparator}edits').existsSync(),
+        isFalse,
+        reason: '编辑历史不再写盘');
   });
 
   test('撤销/重做经控制器生效', () async {
-    final store = JsonStore(baseDir: tmp);
     final src = await _solid(40, 40, 0xFF204080);
-    final c = EditorController(imageId: 'x', source: src, store: store);
+    final c = EditorController(imageId: 'x', source: src);
+    addTearDown(c.dispose);
     await c.addNode(FilterNode(op: Ops.rotate, params: {'deg': 90}));
     await c.undo();
     expect(c.pipeline.nodes, isEmpty);
@@ -52,9 +56,9 @@ void main() {
   });
 
   test('导出 PNG 与 JPG 的文件头正确', () async {
-    final store = JsonStore(baseDir: tmp);
     final src = await _solid(32, 32, 0xFF204080);
-    final c = EditorController(imageId: 'x', source: src, store: store);
+    final c = EditorController(imageId: 'x', source: src);
+    addTearDown(c.dispose);
     await c.addNode(FilterNode(op: Ops.resize, params: {'width': 16}));
 
     final png = await c.exportBytes(ExportFormat.png);
@@ -68,9 +72,9 @@ void main() {
   });
 
   test('writeFile 覆盖时自动生成 .bak 备份', () async {
-    final store = JsonStore(baseDir: tmp);
     final src = await _solid(16, 16, 0xFF204080);
-    final c = EditorController(imageId: 'x', source: src, store: store);
+    final c = EditorController(imageId: 'x', source: src);
+    addTearDown(c.dispose);
 
     final target = '${tmp.path}${Platform.pathSeparator}out.png';
     await c.writeFile(target, [1, 2, 3]);
@@ -81,9 +85,9 @@ void main() {
   });
 
   test('generation 随节点/历史变化递增（驱动画布重绘）', () async {
-    final store = JsonStore(baseDir: tmp);
     final src = await _solid(64, 32, 0xFF204080);
-    final c = EditorController(imageId: 'x', source: src, store: store);
+    final c = EditorController(imageId: 'x', source: src);
+    addTearDown(c.dispose);
     final g0 = c.generation;
     await c.addNode(
         FilterNode(op: Ops.crop, params: {'x': 0, 'y': 0, 'w': 0.5, 'h': 0.5}));
@@ -95,9 +99,8 @@ void main() {
   });
 
   test('导出走全尺寸 source 离屏合成', () async {
-    final store = JsonStore(baseDir: tmp);
     final src = await _solid(3000, 2000, 0xFF204080);
-    final c = EditorController(imageId: 'p', source: src, store: store);
+    final c = EditorController(imageId: 'p', source: src);
     await c.addNode(FilterNode(
         op: Ops.crop, params: {'x': 0, 'y': 0, 'w': 0.5, 'h': 0.5}));
     final png = await c.exportBytes(ExportFormat.png);

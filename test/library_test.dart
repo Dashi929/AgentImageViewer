@@ -73,4 +73,41 @@ void main() {
     expect(lib.entryAt(outside), isNotNull,
         reason: '外部打开的图片自动登记进图库且不被监控目录 rescan 清掉');
   });
+
+  test('hideEntry 从图库移除：本地文件不动，rescan 不再收录', () async {
+    final store = JsonStore(baseDir: tmp);
+    final lib = LibraryIndex(store);
+    await lib.addFolder(pics);
+    await lib.rescan();
+
+    // 索引键为 dir.list() 的原生路径（Windows 反斜杠），与 UI 传入的 e.path 同源
+    final bPath = '$pics${Platform.pathSeparator}b.jpg';
+    lib.hideEntry(bPath);
+    await lib.flush();
+    expect(lib.entries.map((e) => e.name), ['a.png', 'c.gif']);
+    expect(File('$pics/b.jpg').existsSync(), isTrue,
+        reason: '虚拟删除不触碰本地文件');
+
+    // 重扫后不复活；重启后隐藏列表持久
+    await lib.rescan();
+    expect(lib.entryAt(bPath), isNull);
+    final lib2 = LibraryIndex(store);
+    await lib2.load();
+    await lib2.rescan();
+    expect(lib2.entries.map((e) => e.name), ['a.png', 'c.gif']);
+  });
+
+  test('hideEntry 幂等：重复移除同一不存在的路径不误标脏', () async {
+    final store = JsonStore(baseDir: tmp);
+    final lib = LibraryIndex(store);
+    await lib.addFolder(pics);
+    await lib.rescan();
+    await lib.flush();
+
+    final bPath = '$pics${Platform.pathSeparator}b.jpg';
+    lib.hideEntry(bPath);
+    lib.hideEntry(bPath);
+    await lib.flush();
+    expect(lib.entries.map((e) => e.name), ['a.png', 'c.gif']);
+  });
 }

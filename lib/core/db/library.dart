@@ -15,6 +15,9 @@ class LibraryIndex {
   JsonStore get store => _store;
   final Map<String, ImageEntry> _byPath = {};
   final List<String> _folders = [];
+
+  /// 「从图库移除」的路径（虚拟删除：本地文件不动，重扫不再收录）。
+  final Set<String> _hidden = {};
   bool _loaded = false;
   bool _dirty = false;
 
@@ -33,6 +36,7 @@ class LibraryIndex {
     _folders.clear();
     if (data != null) {
       _folders.addAll((data['folders'] as List? ?? []).cast<String>());
+      _hidden.addAll((data['hidden'] as List? ?? []).cast<String>());
       for (final e in (data['items'] as List? ?? [])) {
         final entry = ImageEntry.fromJson((e as Map).cast<String, Object?>());
         _byPath[entry.path] = entry;
@@ -44,6 +48,7 @@ class LibraryIndex {
   Future<void> _persist() => _store.save('library.json', {
         'version': 1,
         'folders': _folders,
+        'hidden': _hidden.toList(),
         'items': [for (final e in _byPath.values) e.toJson()],
       });
 
@@ -74,10 +79,11 @@ class LibraryIndex {
 
   /// 扫描所有监控文件夹并合并进索引，随后落盘。
   /// 清理已消失的文件条目（仅限监控文件夹内；外部登记的文件保留，由 stat 失败时惰性剔除）。
+  /// 「从图库移除」的路径不再收录。
   Future<List<ImageEntry>> rescan() async {
     if (!_loaded) await load();
     for (final f in _folders) {
-      upsertAll(await scanDirectory(f));
+      await scanFolderInto(f);
     }
     for (final f in _folders) {
       _byPath.removeWhere((p, _) =>
@@ -88,7 +94,30 @@ class LibraryIndex {
     return entries;
   }
 
+  /// 扫描 [folder] 并合并索引（跳过已「从图库移除」的路径），随后落盘。
+  /// 返回本次实际入库的条目。
+  Future<List<ImageEntry>> scanFolderInto(String folder) async {
+    if (!_loaded) await load();
+    final visible =
+        (await scanDirectory(folder)).where((e) => !_hidden.contains(e.path));
+    upsertAll(visible);
+    await flush();
+    return visible.toList();
+  }
+
   // ---------- 虚拟操作（与 AI 共用同一套记录，设计书 2.5） ----------
+
+  /// 从图库移除条目（虚拟删除）：本地文件不动，重扫不再收录。
+  void hideEntry(String path) {
+    final removed = _byPath.remove(path) != null;
+    final marked = _hidden.add(path);
+    if (removed || marked) {
+      _dirty = true;
+    }
+  }
+
+  /// 是否已被「从图库移除」。
+  bool isHidden(String path) => _hidden.contains(path);
 
   void toggleFavorite(String path) {
     final e = _byPath[path];

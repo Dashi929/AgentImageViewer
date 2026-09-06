@@ -13,7 +13,6 @@ import '../../app_state.dart';
 import '../../core/image/image_manager.dart';
 import '../../core/image/heic_support.dart';
 import '../../core/scanner.dart';
-import '../../platform/trash.dart';
 
 import '../theme.dart';
 
@@ -481,7 +480,7 @@ class _ThumbCardState extends State<_ThumbCard> {
         const PopupMenuDivider(),
         const PopupMenuItem(value: 'copyPath', child: Text('复制文件路径')),
         const PopupMenuItem(value: 'reveal', child: Text('显示所在文件夹')),
-        const PopupMenuItem(value: 'trash', child: Text('移入回收站')),
+        const PopupMenuItem(value: 'delete', child: Text('从图库删除')),
         const PopupMenuDivider(),
         const PopupMenuItem(value: 'props', child: Text('属性')),
       ],
@@ -541,14 +540,27 @@ class _ThumbCardState extends State<_ThumbCard> {
           }
         case 'copyPath':
           await Clipboard.setData(ClipboardData(text: e.path));
-        case 'trash':
-          final ok = await moveToRecycleBin(e.path);
-          if (ok) {
-            await app.library.rescan();
-            app.refreshGallery();
-            if (context.mounted) _osd('已移入回收站');
-          } else {
-            if (context.mounted) _osd('移入回收站失败');
+        case 'delete':
+          if (!context.mounted) return;
+          final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('从图库删除'),
+              content: const Text('仅从图库移除此图，不删除本地文件。'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('取消')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('删除')),
+              ],
+            ),
+          );
+          if (confirmed == true) {
+            app.library.hideEntry(e.path);
+            await app.library.flush();
+            if (context.mounted) _osd('已从图库移除（本地文件保留）');
           }
         case 'reveal':
           if (Platform.isWindows) {

@@ -1,6 +1,6 @@
 /// 编辑视图（设计书 4.3.3）：中央画布 + 左侧工具箱 + 右侧属性面板。
 ///
-/// 非破坏性：所有操作进操作栈，进入编辑即自动保存，中途退出不丢失历史。
+/// 非破坏性：所有操作进操作栈；历史仅存于内存，退出编辑即丢弃（需保留请导出）。
 library;
 
 import 'dart:math' as math;
@@ -69,9 +69,7 @@ class _EditorPageState extends State<EditorPage> {
     final ctrl = EditorController(
       imageId: id,
       source: softwareSource,
-      store: app.store,
     );
-    await ctrl.loadStack();
     if (!mounted) return;
     setState(() => _controller = ctrl);
   }

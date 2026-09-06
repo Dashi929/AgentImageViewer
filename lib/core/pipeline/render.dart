@@ -37,9 +37,13 @@ const knownPresets = ['bw', 'sepia', 'film', 'cool', 'warm', 'fade'];
         w = nw;
         h = nh;
       case Ops.rotate:
-        final t = w;
-        w = h;
-        h = t;
+        // 90/270 交换宽高；180/0 不交换
+        final d = ((n.params['deg'] as num).toInt() % 360 + 360) % 360;
+        if (d == 90 || d == 270) {
+          final t = w;
+          w = h;
+          h = t;
+        }
       case Ops.crop:
         w = w * (n.params['w'] as num);
         h = h * (n.params['h'] as num);
@@ -122,22 +126,28 @@ Future<ui.Image> _apply(ui.Image img, FilterNode n) async {
       });
 
     case Ops.rotate:
-      final deg = (n.params['deg'] as num).toInt();
-      final swap = deg == 90 || deg == -90;
+      final d = ((n.params['deg'] as num).toInt() % 360 + 360) % 360;
+      final swap = d == 90 || d == 270;
       final w = swap ? img.height : img.width;
       final h = swap ? img.width : img.height;
       return _newCanvas(w, h, (c) {
+        // 新画布中心为旋转中心：源图绕中心旋转后恰好充满画布
         c.translate(w / 2, h / 2);
-        c.rotate(deg * math.pi / 180);
+        c.rotate(d * math.pi / 180);
         c.drawImage(img, ui.Offset(-img.width / 2, -img.height / 2), ui.Paint());
       });
 
     case Ops.flip:
       final axis = n.params['axis'] as String;
       return _newCanvas(img.width, img.height, (c) {
-        c.translate(axis == 'h' ? img.width.toDouble() : 0, 0);
-        c.scale(axis == 'h' ? -1 : 1, axis == 'h' ? 1 : -1);
-        if (axis == 'v') c.translate(0, img.height.toDouble());
+        // 先平移再镜像：翻转后恰好铺满画布（先 scale 后 translate 会越出画布）
+        if (axis == 'h') {
+          c.translate(img.width.toDouble(), 0);
+          c.scale(-1, 1);
+        } else {
+          c.translate(0, img.height.toDouble());
+          c.scale(1, -1);
+        }
         c.drawImage(img, ui.Offset.zero, ui.Paint());
       });
 
@@ -254,8 +264,8 @@ void paintAnnotateVectors(ui.Canvas c, ui.Size outSize, Map<String, Object?> par
   if (kind == AnnotateKinds.doodle) {
     final pts = (params['points'] as List? ?? [])
         .map((e) => ui.Offset(
-            ((e as Map)['x'] as num?)?.toDouble() ?? 0,
-            ((e)['y'] as num?)?.toDouble() ?? 0))
+            (((e as Map)['x'] as num?)?.toDouble() ?? 0) * outSize.width,
+            (((e)['y'] as num?)?.toDouble() ?? 0) * outSize.height))
         .toList();
     final stroke = ui.Paint()
       ..color = ui.Color(colorValue)
