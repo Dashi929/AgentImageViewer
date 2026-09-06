@@ -70,11 +70,18 @@ Future<ui.Image> renderPipeline(ui.Image source, List<FilterNode> nodes) async {
   return img;
 }
 
-Future<ui.Image> _newCanvas(int w, int h, void Function(ui.Canvas c) draw) async {
+/// 合成一张新位图。用 toImageSync（GPU 常驻、无回读）——
+/// Windows Impeller/OpenGL 后端下 Picture.toImage 存在崩溃问题，
+/// 且 toImageSync 省去 GPU→CPU 回读，预览滑杆明显更流畅。
+ui.Image newCanvasSync(int w, int h, void Function(ui.Canvas c) draw) {
   final rec = ui.PictureRecorder();
   final c = ui.Canvas(rec, ui.Offset.zero & ui.Size(w.toDouble(), h.toDouble()));
   draw(c);
-  return rec.endRecording().toImage(w, h);
+  return rec.endRecording().toImageSync(w, h);
+}
+
+Future<ui.Image> _newCanvas(int w, int h, void Function(ui.Canvas c) draw) async {
+  return newCanvasSync(w, h, draw);
 }
 
 Future<ui.Image> _apply(ui.Image img, FilterNode n) async {
