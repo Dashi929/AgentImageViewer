@@ -14,10 +14,15 @@ import 'node.dart';
 import 'render.dart';
 
 class EditorPreviewPainter extends CustomPainter {
-  EditorPreviewPainter({required this.source, required this.nodes});
+  EditorPreviewPainter({
+    required this.source,
+    required this.nodes,
+    required this.generation,
+  });
 
   final ui.Image source;
   final List<FilterNode> nodes;
+  final int generation; // 节点/历史代数：变化即重绘
 
   @override
   void paint(ui.Canvas canvas, ui.Size size) {
@@ -76,22 +81,9 @@ class EditorPreviewPainter extends CustomPainter {
       }
     }
 
-    // 调整/滤镜合并为一个颜色矩阵（叠加各参数），单次 drawImage 完成
-    final merged = <String, double>{};
-    for (final n in nodes) {
-      if (n.op == Ops.adjust) {
-        n.params.forEach((k, v) =>
-            merged[k] = ((merged[k] ?? 0) + (v as num).toDouble())
-                .clamp(-1.0, 1.0)
-                .toDouble());
-      } else if (n.op == Ops.preset) {
-        presetExpansion(n.params['name'] as String)
-            .forEach((k, v) => merged[k] = v);
-      }
-    }
+    // 颜色调整/滤镜由 widget 层 ColorFiltered 应用（Impeller 下
+    // drawImage+ColorFilter 组合不生效），此处只画原始位图
     final paint = ui.Paint()..filterQuality = ui.FilterQuality.medium;
-    final filter = adjustColorFilter(merged);
-    if (filter != null) paint.colorFilter = filter;
     canvas.drawImageRect(
         source,
         ui.Rect.fromLTWH(0, 0, source.width.toDouble(), source.height.toDouble()),
@@ -110,5 +102,5 @@ class EditorPreviewPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant EditorPreviewPainter old) =>
-      old.source != source || old.nodes.length != nodes.length;
+      old.generation != generation;
 }

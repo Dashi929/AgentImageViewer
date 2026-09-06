@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:agent_image_viewer/core/editor/editor_controller.dart';
 import 'package:agent_image_viewer/core/db/json_store.dart';
 import 'package:agent_image_viewer/core/pipeline/node.dart';
+import 'package:agent_image_viewer/core/pipeline/preview_painter.dart';
 import 'package:agent_image_viewer/core/image/image_manager.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -28,13 +29,11 @@ void main() {
 
   test('回归：标注入栈后预览重算成功，淘汰压力下源图/预览图不被释放', () async {
     final src = await _solid(1600, 1000, 0xFF4C9BE8);
-    final prev = await _solid(1024, 640, 0xFF4C9BE8);
 
     final c = EditorController(
       imageId: 'annot-regression',
       source: src,
       store: JsonStore(baseDir: tmp),
-      previewSource: prev,
     );
     addTearDown(c.dispose);
 
@@ -46,10 +45,16 @@ void main() {
       'x2': 0.7,
       'y2': 0.6,
     }));
-    final ok = await c.recomputePreview();
-    expect(ok, isTrue);
-    final previewAfterAnnotate = c.preview;
-    expect(previewAfterAnnotate, isNotNull);
+    expect(c.generation, 1);
+
+    // 屏幕直绘 painter 绘制无异常（含标注矢量与源位图）
+    final recorder = ui.PictureRecorder();
+    final canvas = ui.Canvas(
+        recorder, ui.Offset.zero & const ui.Size(800, 600));
+    EditorPreviewPainter(
+            source: src, nodes: c.pipeline.nodes, generation: c.generation)
+        .paint(canvas, const ui.Size(800, 600));
+    recorder.endRecording();
 
     // 淘汰压力：向 ImageManager 大量注入新解码（旧 bug 会释放源/预览图）
     final mgr = ImageManager(thumbCacheDir: Directory('${tmp.path}/thumbs'),
@@ -63,10 +68,15 @@ void main() {
       await file.delete();
     }
 
-    // 源/预览图被钉住：再次求值仍成功且结果稳定
-    final ok2 = await c.recomputePreview();
-    expect(ok2, isFalse, reason: '管线未变，预览保持');
-    expect(c.preview, same(previewAfterAnnotate));
+    // 源图被钉住：再次直绘仍成功
+    final recorder2 = ui.PictureRecorder();
+    EditorPreviewPainter(
+            source: src,
+            nodes: c.pipeline.nodes,
+            generation: c.generation)
+        .paint(ui.Canvas(recorder2, ui.Offset.zero & const ui.Size(800, 600)),
+            const ui.Size(800, 600));
+    recorder2.endRecording();
     mgr.dispose();
   });
 

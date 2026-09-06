@@ -27,8 +27,7 @@ class EditorController extends ChangeNotifier {
     required this.imageId,
     required this.source,
     required this.store,
-    ui.Image? previewSource,
-  }) : previewSource = previewSource ?? source {
+  }) {
     _active[imageId] = this;
   }
 
@@ -43,20 +42,14 @@ class EditorController extends ChangeNotifier {
 
   final String imageId;
 
-  /// 全尺寸源图（导出合成用）。
+  /// 全尺寸源图（屏幕直绘与导出合成用）。
   final ui.Image source;
-
-  /// 预览源图（≤2048，滑杆实时求值用，避免大图卡顿）。
-  final ui.Image previewSource;
 
   final JsonStore store;
   final ImagePipeline pipeline = ImagePipeline();
 
-  ui.Image? _preview;
-  String _previewHash = '';
-
-  /// 当前预览（管线求值结果；无节点时直接复用原图）。
-  ui.Image? get preview => _preview;
+  /// 预览代数：节点/历史每次变化 +1，驱动画布 painter 重绘。
+  int generation = 0;
   bool get dirty => pipeline.toJson().isNotEmpty;
 
   /// 加载持久化的操作栈（进入编辑时调用）。
@@ -79,12 +72,14 @@ class EditorController extends ChangeNotifier {
 
   Future<void> addNode(FilterNode node) async {
     pipeline.add(node);
+    generation++;
     notifyListeners();
     await saveStack();
   }
 
   Future<void> undo() async {
     if (pipeline.undo()) {
+      generation++;
       notifyListeners();
       await saveStack();
     }
@@ -92,6 +87,7 @@ class EditorController extends ChangeNotifier {
 
   Future<void> redo() async {
     if (pipeline.redo()) {
+      generation++;
       notifyListeners();
       await saveStack();
     }
@@ -99,38 +95,9 @@ class EditorController extends ChangeNotifier {
 
   Future<void> resetAll() async {
     pipeline.reset(null);
+    generation++;
     notifyListeners();
     await saveStack();
-  }
-
-  /// 重算预览：管线未变则跳过；返回是否实际重算。
-  Future<bool> recomputePreview() async {
-    // Map.hashCode 是身份哈希：toJson 每次 new Map 会恒变，
-    // 必须用内容稳定的字符串做去重指纹
-    final hash = pipeline.nodes.map((n) => n.toJson().toString()).join('|');
-    if (hash == _previewHash && _preview != null) return false;
-    _previewHash = hash;
-    try {
-      _preview = pipeline.nodes.isEmpty
-          ? previewSource
-          : await renderPipeline(previewSource, pipeline.nodes);
-      assert(() {
-        // ignore: avoid_print
-        print('[editor] rendered ${pipeline.nodes.length} nodes -> '
-            'preview ${_preview!.width}x${_preview!.height} (src '
-            '${previewSource.width}x${previewSource.height})');
-        return true;
-      }());
-    } catch (e) {
-      assert(() {
-        // ignore: avoid_print
-        print('[editor] render FAILED: $e');
-        return true;
-      }());
-      return false; // 渲染失败保持旧预览，不让 UI 线程崩掉
-    }
-    notifyListeners();
-    return true;
   }
 
   /// 导出合成：整栈一次性求值到目标像素（设计书 2.3）。
@@ -167,7 +134,6 @@ class EditorController extends ChangeNotifier {
   @override
   void dispose() {
     _active.remove(imageId);
-    if (_preview != null && _preview != previewSource) _preview!.dispose();
     super.dispose();
   }
 }

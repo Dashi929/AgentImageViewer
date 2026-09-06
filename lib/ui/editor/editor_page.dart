@@ -10,7 +10,6 @@ import 'package:flutter/services.dart';
 
 import '../../app_state.dart';
 import '../../core/editor/editor_controller.dart';
-import '../../core/image/image_manager.dart' show ImageManager;
 import '../../core/pipeline/node.dart';
 import '../../core/pipeline/preview_painter.dart';
 import 'dart:ui' as ui;
@@ -56,41 +55,22 @@ class _EditorPageState extends State<EditorPage> {
     // 源图（导出用全尺寸）+ 预览图（≤2048，滑杆实时求值不卡）
     final decoded = await app.images
         .decode(widget.entry.path, widget.entry.mtimeMs, autoPin: true);
-    // 预览级不超过原图尺寸：解码器 upscale（target 大于原图）在部分平台产生损坏位图
-    final previewTarget =
-        math.min(2048, math.max(decoded.width, decoded.height));
-    final previewDecoded = await app.images.decode(
-        widget.entry.path, widget.entry.mtimeMs,
-        target: previewTarget, autoPin: true);
-    if (!mounted) return;
-    // 关键：重建为 software 位图，否则硬件位图画进 toImageSync 画布会全黑
-    final previewImg =
-        await ImageManager.toSoftwareImage(previewDecoded.image);
     if (!mounted) return;
     _pinnedSourceKey = decoded.cacheKey;
-    _pinnedPreviewKey = previewDecoded.cacheKey;
 
     final id = widget.entry.path.hashCode.toUnsigned(32).toString();
     final ctrl = EditorController(
       imageId: id,
       source: decoded.image,
-      previewSource: previewImg,
       store: app.store,
     );
     await ctrl.loadStack();
     if (!mounted) return;
     setState(() => _controller = ctrl);
-    ctrl.addListener(_onPipelineChanged);
-    await ctrl.recomputePreview();
-  }
-
-  void _onPipelineChanged() {
-    _controller?.recomputePreview();
   }
 
   @override
   void dispose() {
-    _controller?.removeListener(_onPipelineChanged);
     _controller?.dispose();
     final app = _appRef;
     final k1 = _pinnedSourceKey;
@@ -408,7 +388,7 @@ class _EditorPageState extends State<EditorPage> {
               onPressed: ctrl.pipeline.canRedo ? ctrl.redo : null,
               icon: const Icon(Icons.redo, size: 20),
               tooltip: '重做 (Ctrl+Y)'),
-          _CompareButton(source: ctrl.source, preview: ctrl.preview),
+          _CompareButton(source: ctrl.source),
           IconButton(
               onPressed: ctrl.dirty ? ctrl.resetAll : null,
               icon: const Icon(Icons.restart_alt, size: 20),
@@ -486,16 +466,11 @@ class _EditorPageState extends State<EditorPage> {
 
   Widget _canvas(EditorController ctrl) {
     return LayoutBuilder(builder: (context, box) {
-      final preview = ctrl.preview;
-      if (preview == null) {
-        return const Center(
-            child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.accent));
-      }
       final canvas = box.biggest;
-      final fit = math.min(
-          canvas.width / preview.width, canvas.height / preview.height);
-      final drawW = preview.width * fit;
-      final drawH = preview.height * fit;
+      final out = sizeAfter(ctrl.pipeline.nodes, ctrl.source.width, ctrl.source.height);
+      final fit = math.min(canvas.width / out.w, canvas.height / out.h);
+      final drawW = out.w * fit;
+      final drawH = out.h * fit;
       final topLeft = Offset((canvas.width - drawW) / 2, (canvas.height - drawH) / 2);
 
       // 求值前尺寸（拖拽覆盖层用原图坐标系）
@@ -509,12 +484,24 @@ class _EditorPageState extends State<EditorPage> {
         child: Stack(
           children: [
             Center(
-              // 屏幕直绘：源位图 + 节点矢量叠加（无中间位图，绕开离屏显示问题）
-              child: CustomPaint(
-                size: Size(drawW, drawH),
-                painter: EditorPreviewPainter(
-                    source: ctrl.previewSource, nodes: ctrl.pipeline.nodes),
-              ),
+              // 屏幕直绘：源位图 + 节点矢量叠加。
+              // 颜色调整/滤镜经 widget 层 ColorFiltered（Impeller 的
+              // drawImage+ColorFilter 不生效）；标注矢量在滤镜内侧绘制后
+              // 一并被调色，与导出顺序略有差异（可接受，已注释）。
+              child: Builder(builder: (context) {
+                final merged = mergedAdjustOf(ctrl.pipeline.nodes);
+                final filter = adjustColorFilter(merged);
+                final paintLayer = CustomPaint(
+                  size: Size(drawW, drawH),
+                  painter: EditorPreviewPainter(
+                      source: ctrl.source,
+                      nodes: ctrl.pipeline.nodes,
+                      generation: ctrl.generation),
+                );
+                if (filter == null) return paintLayer;
+                return ColorFiltered(
+                    colorFilter: filter, child: paintLayer);
+              }),
             ),
             // 透明棋盘格底（4.3.3）：由画布背景承担
             if (_dragStart != null && _dragNow != null) _dragOverlay(topLeft, drawW, drawH),
@@ -756,10 +743,9 @@ class _EditorPageState extends State<EditorPage> {
 
 /// 对比按钮：按住显示原图，松开恢复预览（4.3.3「与原图对比」）。
 class _CompareButton extends StatefulWidget {
-  const _CompareButton({required this.source, required this.preview});
+  const _CompareButton({required this.source});
 
   final ui.Image source;
-  final ui.Image? preview;
 
   @override
   State<_CompareButton> createState() => _CompareButtonState();

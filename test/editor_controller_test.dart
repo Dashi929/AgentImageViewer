@@ -80,30 +80,29 @@ void main() {
     expect(await File(target).readAsBytes(), [9, 9]);
   });
 
-  test('预览用 previewSource，导出仍用全尺寸 source', () async {
-    final store = JsonStore(baseDir: tmp);
-    final src = await _solid(3000, 2000, 0xFF204080);
-    final prev = await _solid(1500, 1000, 0xFF204080);
-    final c = EditorController(
-        imageId: 'p', source: src, store: store, previewSource: prev);
-    await c.recomputePreview();
-    expect(c.preview!.width, 1500, reason: '预览按 previewSource 求值');
-    final png = await c.exportBytes(ExportFormat.png);
-    expect((png.width, png.height), (3000, 2000), reason: '导出走全尺寸 source');
-    c.dispose();
-  });
-
-  test('recomputePreview：管线未变不重算，变更后预览尺寸正确', () async {
+  test('generation 随节点/历史变化递增（驱动画布重绘）', () async {
     final store = JsonStore(baseDir: tmp);
     final src = await _solid(64, 32, 0xFF204080);
     final c = EditorController(imageId: 'x', source: src, store: store);
-    final recomputed1 = await c.recomputePreview();
-    expect(recomputed1, isTrue);
-    final recomputed2 = await c.recomputePreview();
-    expect(recomputed2, isFalse, reason: '相同管线跳过重算');
+    final g0 = c.generation;
+    await c.addNode(
+        FilterNode(op: Ops.crop, params: {'x': 0, 'y': 0, 'w': 0.5, 'h': 0.5}));
+    expect(c.generation, g0 + 1);
+    await c.undo();
+    expect(c.generation, g0 + 2);
+    await c.redo();
+    expect(c.generation, g0 + 3);
+  });
 
-    await c.addNode(FilterNode(op: Ops.crop, params: {'x': 0, 'y': 0, 'w': 0.5, 'h': 0.5}));
-    await c.recomputePreview();
-    expect(c.preview!.width, 32);
+  test('导出走全尺寸 source 离屏合成', () async {
+    final store = JsonStore(baseDir: tmp);
+    final src = await _solid(3000, 2000, 0xFF204080);
+    final c = EditorController(imageId: 'p', source: src, store: store);
+    await c.addNode(FilterNode(
+        op: Ops.crop, params: {'x': 0, 'y': 0, 'w': 0.5, 'h': 0.5}));
+    final png = await c.exportBytes(ExportFormat.png);
+    expect((png.width, png.height), (1500, 1000),
+        reason: '导出为离屏精确合成');
+    c.dispose();
   });
 }

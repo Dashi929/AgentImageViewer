@@ -58,6 +58,23 @@ const knownPresets = ['bw', 'sepia', 'film', 'cool', 'warm', 'fade'];
   return (w: math.max(1, w.round()), h: math.max(1, h.round()));
 }
 
+/// 汇总管线中全部 调整/滤镜 节点为合并参数表（屏幕预览用）。
+Map<String, double> mergedAdjustOf(List<FilterNode> nodes) {
+  final merged = <String, double>{};
+  for (final n in nodes) {
+    if (n.op == Ops.adjust) {
+      n.params.forEach((k, v) =>
+          merged[k] = ((merged[k] ?? 0) + (v as num).toDouble())
+              .clamp(-1.0, 1.0)
+              .toDouble());
+    } else if (n.op == Ops.preset) {
+      presetExpansion(n.params['name'] as String)
+          .forEach((k, v) => merged[k] = v);
+    }
+  }
+  return merged;
+}
+
 /// 节点是否需要用户确认才会执行（AI 生成式节点）。
 bool nodeNeedsConfirm(FilterNode n) => n.op == Ops.aiEdit;
 
