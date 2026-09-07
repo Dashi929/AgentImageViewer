@@ -20,6 +20,14 @@ import '../../core/viewer/viewer_state.dart';
 import '../shortcuts_sheet.dart';
 import '../theme.dart';
 
+/// 浏览器兼容的动图帧间隔：GIF 延时单位为 1/100 秒，0 与 10ms（1cs）帧按
+/// Chrome/Firefox 惯例钳到 100ms。引擎对延时原样返回（实测 0cs→0ms），
+/// 直接用会让 Timer 零间隔空转、动图快放到不可看。
+Duration clampAnimFrameDelay(Duration d) =>
+    d <= const Duration(milliseconds: 10)
+        ? const Duration(milliseconds: 100)
+        : d;
+
 class ViewerPage extends StatefulWidget {
   const ViewerPage({super.key, required this.list, required this.initialIndex});
 
@@ -49,10 +57,19 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
   bool _controlsVisible = true;
   Timer? _hideTimer;
 
-  // 动图播放（GIF/WebP）：自动播放，空格暂停取帧（设计书 2.2）
+  // 动图播放（GIF/WebP）：自动播放，空格暂停取帧（设计书 2.2）。
+  // 暂停分两源：用户手动（空格）与退后台自动；任一为真即停取帧，
+  // 恢复只在两个来源都为假时进行。
   ui.Codec? _animCodec;
   Timer? _animTimer;
-  bool _animPaused = false;
+  bool _userPaused = false;
+  bool _autoPaused = false;
+  bool get _animPaused => _userPaused || _autoPaused;
+
+  // 播放循环代号：每次外部启动循环自增。取帧在途时若代号已变，
+  // 说明有新循环接管，旧取帧结果作废丢弃——防止暂停/恢复竞态产生
+  // 双循环（表现即 2 倍速）。
+  int _animGen = 0;
 
   // 幻灯片（设计书 2.2：间隔 1/3/5/10s 可选，随机与循环）
   bool _slideshow = false;
@@ -73,23 +90,18 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     _armHideTimer();
   }
 
-  // 移动端生命周期：退后台立即停止动图取帧（设计书 3.3）
-  bool _wasAnimPaused = false;
-
+  // 移动端生命周期：退后台立即停止动图取帧（设计书 3.3）。
+  // 只置 _autoPaused 标志：hidden→paused 会连续触发两次，若在此记录
+  // 「退后台前是否在播」会互相覆盖，导致恢复前台后动图永不续播。
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.paused || AppLifecycleState.hidden:
-        _wasAnimPaused = _animPaused;
-        if (_animCodec != null && !_animPaused) {
-          _animPaused = true;
-          _animTimer?.cancel();
-        }
+        _autoPaused = true;
+        _animTimer?.cancel();
       case AppLifecycleState.resumed:
-        if (_animCodec != null && _animPaused && !_wasAnimPaused) {
-          _animPaused = false;
-          _playNextFrame();
-        }
+        _autoPaused = false;
+        if (_animCodec != null && !_userPaused) _startAnimLoop();
       default:
         break;
     }
@@ -134,6 +146,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     if (_upgrading || !mounted) return;
     final img = _displayImage;
     if (img == null || _view.imageWidth == 0) return;
+    if (_animCodec != null) return; // 动图帧由播放循环自管，静态升级帧会闪回
     final dpr = View.of(context).devicePixelRatio;
     final fitTarget = (_view.viewportW * dpr).clamp(320, 2048).toInt();
     final upper = math.min(_view.imageWidth, 4096);
@@ -144,7 +157,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     try {
       final e = _entry;
       final d = await _app.images.decode(e.path, e.mtimeMs, target: desired);
-      if (!mounted || _entry.path != e.path) return;
+      if (!mounted || _entry.path != e.path || _animCodec != null) return;
       _applyDecoded(d);
       setState(() {});
     } catch (_) {
@@ -156,27 +169,44 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
 
   Future<void> _maybeAnimate(ImageEntry e) async {
     _animTimer?.cancel();
+    _animTimer = null;
+    _animCodec?.dispose(); // 旧 codec 退役；在途取帧由 _playNextFrame 兜底
     _animCodec = null;
-    _animPaused = false;
+    _userPaused = false;
     try {
       final bytes = await File(e.path).readAsBytes();
       final codec = await ui.instantiateImageCodec(bytes);
-      if (codec.frameCount <= 1 || _entry.path != e.path) {
+      if (!mounted || codec.frameCount <= 1 || _entry.path != e.path) {
         codec.dispose();
         return;
       }
       _animCodec = codec;
-      _playNextFrame();
+      _startAnimLoop();
     } catch (_) {
       // 解码失败保持静态呈现
     }
   }
 
+  /// 外部启动一轮新的播放循环：先掐掉可能在途的旧定时器并换代号，
+  /// 使任何旧循环的取帧结果在完成时因代号不符而作废。
+  void _startAnimLoop() {
+    _animTimer?.cancel();
+    _animTimer = null;
+    _animGen++;
+    _playNextFrame();
+  }
+
   Future<void> _playNextFrame() async {
     final codec = _animCodec;
     if (codec == null || _animPaused || !mounted) return;
-    final info = await codec.getNextFrame();
-    if (!mounted || _animCodec != codec) {
+    final gen = _animGen;
+    final ui.FrameInfo info;
+    try {
+      info = await codec.getNextFrame();
+    } catch (_) {
+      return; // codec 已被替换/释放，循环终止
+    }
+    if (!mounted || _animCodec != codec || _animPaused || gen != _animGen) {
       info.image.dispose();
       return;
     }
@@ -185,7 +215,8 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     _pinnedKey = null;
     _displayImage = info.image;
     setState(() {});
-    _animTimer = Timer(info.duration, () => _playNextFrame());
+    _animTimer =
+        Timer(clampAnimFrameDelay(info.duration), () => _playNextFrame());
   }
 
   TextEditingController? _renameCtrl;
@@ -368,9 +399,13 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
 
   void _toggleAnimPause() {
     if (_animCodec == null) return;
-    _animPaused = !_animPaused;
-    if (!_animPaused) _playNextFrame();
-    _showOsd(_animPaused ? '已暂停' : '播放中');
+    _userPaused = !_userPaused;
+    if (!_userPaused && !_autoPaused) {
+      _startAnimLoop();
+    } else {
+      _animTimer?.cancel();
+    }
+    _showOsd(_userPaused ? '已暂停' : '播放中');
   }
 
   void _applyDecoded(DecodedImage d) {
