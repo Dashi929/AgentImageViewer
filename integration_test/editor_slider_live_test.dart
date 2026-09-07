@@ -6,7 +6,6 @@ import 'package:agent_image_viewer/app_state.dart';
 import 'package:agent_image_viewer/core/editor/editor_controller.dart';
 import 'package:agent_image_viewer/core/pipeline/node.dart';
 import 'package:agent_image_viewer/main.dart' as app;
-import 'package:agent_image_viewer/ui/editor/editor_page.dart';
 import 'package:agent_image_viewer/ui/gallery/gallery_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -65,6 +64,7 @@ void main() {
     expect(deg1, greaterThan(0), reason: '右拖应产生正向角度');
 
     // ---- 第二轮：合并为单节点（不越转越少的关键） ----
+    // 滑杆现在显示已提交的累计角度；从滑杆中心再拖（绝对语义下即从 0 附近开始）
     final frSlider2 = tester.widget<Slider>(find.byType(Slider).first);
     final center2 = tester.getCenter(find.byWidget(frSlider2));
     final gesture2 = await tester.startGesture(center2);
@@ -79,8 +79,10 @@ void main() {
     expect(c.pipeline.nodes.map((n) => n.op), ['free_rotate'],
         reason: '多次自由旋转必须合并为栈尾单节点，避免重复烘焙');
     final deg2 = (c.pipeline.nodes.single.params['deg'] as num).toDouble();
-    expect(deg2, greaterThan(deg1), reason: '角度应累加');
     expect(deg2, lessThanOrEqualTo(180), reason: '归一化边界');
+    // 滑杆显示已生效值：标签文本应与提交后的累计角度一致
+    expect(find.text('${deg2.round()}°'), findsWidgets,
+        reason: '提交后滑杆应显示当前生效角度而不是归 0');
     // 撤销回上一轮角度
     await c.undo();
     expect((c.pipeline.nodes.single.params['deg'] as num).toDouble(), deg1);

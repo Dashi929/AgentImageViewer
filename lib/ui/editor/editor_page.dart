@@ -42,8 +42,17 @@ class _EditorPageState extends State<EditorPage> {
   // 会抢在页面 autofocus 之前持有焦点，必须在就绪后显式 requestFocus。
   final FocusNode _focusNode = FocusNode(debugLabel: 'editor');
 
-  // 调整滑杆的会话值（须放在 State 上：拖动中控制器 notify 会整页重建，
-  // 放在 build 局部变量里滑杆会被重置回 0）
+  // 裁剪/标注的拖拽状态（画布坐标，导出时换算相对比例）
+  Offset? _dragStart;
+  Offset? _dragNow;
+  final List<Offset> _doodlePts = [];
+
+  // 裁剪会话（PS 式两阶段：先出选区预览，确认才入栈生效）
+  Rect? _cropSession; // 选区（相对比例，基于当前输出画幅）
+  bool _cropSelecting = false; // 已进入自由裁剪（画布拖拽更新选区）
+
+  // 调整滑杆的会话状态（须放在 State 上：拖动中控制器 notify 会整页重建；
+  // 滑杆常态显示已提交的合并值，拖动会话内显示会话绝对值）
   static const _adjustKeys = [
     ('brightness', '亮度'),
     ('contrast', '对比度'),
@@ -51,16 +60,8 @@ class _EditorPageState extends State<EditorPage> {
     ('temperature', '色温'),
     ('vignette', '暗角'),
   ];
-  final Map<String, double> _adjustValues = {
-    for (final (k, _) in _adjustKeys) k: 0,
-  };
+  final Map<String, double> _adjustDrag = {};
   Map<String, double>? _adjustBaseline; // 会话开始时已提交的合并值
-
-  // 裁剪/标注的拖拽状态（画布坐标，导出时换算相对比例）
-  Offset? _dragStart;
-  Offset? _dragNow;
-  final List<Offset> _doodlePts = [];
-  final _cropKey = GlobalKey();
 
   @override
   void initState() {
@@ -116,6 +117,82 @@ class _EditorPageState extends State<EditorPage> {
   void _addRotate(int deg) => _addNode(FilterNode(op: Ops.rotate, params: {'deg': deg}));
 
   void _addFlip(String axis) => _addNode(FilterNode(op: Ops.flip, params: {'axis': axis}));
+
+  // ---------- 裁剪会话（预览 → 确认生效） ----------
+
+  /// 有效节点 = 已提交节点 + 自由旋转预览（滑杆拖动中即时呈现）。
+  List<FilterNode> _effectiveNodes(EditorController ctrl) {
+    final deg = ctrl.freeRotatePreview;
+    return deg == null
+        ? ctrl.pipeline.nodes
+        : [
+            ...ctrl.pipeline.nodes,
+            FilterNode(op: Ops.freeRotate, params: {'deg': deg}),
+          ];
+  }
+
+  /// 已提交的累计自由旋转角（栈尾为 free_rotate 时取其角度）。
+  double _committedFreeRotateDeg(EditorController ctrl) {
+    final nodes = ctrl.pipeline.nodes;
+    if (nodes.isEmpty || nodes.last.op != Ops.freeRotate) return 0;
+    return (nodes.last.params['deg'] as num).toDouble();
+  }
+
+  void _startFreeCrop() {
+    setState(() {
+      _cropSelecting = true;
+      _cropSession = null;
+      _dragStart = null;
+      _dragNow = null;
+    });
+  }
+
+  /// 预设比例：以当前输出画幅中心取该比例的最大选区（进入预览，待确认）。
+  void _applyCropRatio(double ratio) {
+    final ctrl = _controller;
+    if (ctrl == null) return;
+    final out = sizeAfter(_effectiveNodes(ctrl), ctrl.source.width, ctrl.source.height);
+    final a = out.w / out.h;
+    double rw, rh;
+    if (a / ratio >= 1) {
+      rh = 1;
+      rw = ratio / a;
+    } else {
+      rw = 1;
+      rh = a / ratio;
+    }
+    setState(() {
+      _cropSelecting = true;
+      _dragStart = null;
+      _dragNow = null;
+      _cropSession = Rect.fromLTWH((1 - rw) / 2, (1 - rh) / 2, rw, rh);
+    });
+  }
+
+  void _confirmCropSession() {
+    final r = _cropSession;
+    if (r == null || r.width < 0.02 || r.height < 0.02) return;
+    _addNode(FilterNode(op: Ops.crop, params: {
+      'x': r.left,
+      'y': r.top,
+      'w': r.width,
+      'h': r.height,
+    }));
+    _clearCropSession();
+  }
+
+  void _clearCropSession() {
+    setState(() {
+      _cropSession = null;
+      _cropSelecting = false;
+      _dragStart = null;
+      _dragNow = null;
+    });
+  }
+
+  void _onConfirmKey() {
+    if (_cropSession != null) _confirmCropSession();
+  }
 
   void _commitPreset(String name) => _addNode(FilterNode(op: Ops.preset, params: {'name': name}));
 
@@ -213,7 +290,13 @@ class _EditorPageState extends State<EditorPage> {
   // ---------- 画布交互 ----------
 
   void _onDragStart(Offset local, Size canvasSize, ({int w, int h}) imgSize) {
-    if (_tool == _Tool.crop || _tool == _Tool.annotate) {
+    if (_tool == _Tool.crop) {
+      // 仅自由裁剪模式下拖拽更新选区；选区不直接生效，待确认
+      if (_cropSelecting) {
+        _dragStart = local;
+        _dragNow = local;
+      }
+    } else if (_tool == _Tool.annotate) {
       _dragStart = local;
       _dragNow = local;
     }
@@ -238,17 +321,13 @@ class _EditorPageState extends State<EditorPage> {
     double ry(double py) => (py / canvasSize.height).clamp(0, 1);
 
     if (_tool == _Tool.crop) {
+      // 自由裁剪：拖拽结果进入选区预览，确认后才入栈
       final left = math.min(rx(s.dx), rx(e.dx));
       final right = math.max(rx(s.dx), rx(e.dx));
       final top = math.min(ry(s.dy), ry(e.dy));
       final bottom = math.max(ry(s.dy), ry(e.dy));
       if (right - left > 0.02 && bottom - top > 0.02) {
-        _addNode(FilterNode(op: Ops.crop, params: {
-          'x': left,
-          'y': top,
-          'w': right - left,
-          'h': bottom - top,
-        }));
+        _cropSession = Rect.fromLTRB(left, top, right, bottom);
       }
     } else if (_tool == _Tool.annotate) {
       switch (_annotateKind) {
@@ -320,8 +399,16 @@ class _EditorPageState extends State<EditorPage> {
     }
     return CallbackShortcuts(
       bindings: {
-        const SingleActivator(LogicalKeyboardKey.escape): () =>
-            NavigatorStateEx.editor.value = null,
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          // 裁剪会话优先：先取消选区，再退出编辑
+          if (_cropSession != null || _dragStart != null) {
+            _clearCropSession();
+            return;
+          }
+          NavigatorStateEx.editor.value = null;
+        },
+        const SingleActivator(LogicalKeyboardKey.enter): _onConfirmKey,
+        const SingleActivator(LogicalKeyboardKey.numpadEnter): _onConfirmKey,
         const SingleActivator(LogicalKeyboardKey.keyZ, control: true): ctrl.undo,
         const SingleActivator(LogicalKeyboardKey.keyY, control: true): ctrl.redo,
         const SingleActivator(LogicalKeyboardKey.keyS, control: true): _export,
@@ -433,7 +520,14 @@ class _EditorPageState extends State<EditorPage> {
         child: Tooltip(
           message: label,
           child: InkWell(
-            onTap: () => setState(() => _tool = t),
+            onTap: () => setState(() {
+              _tool = t;
+              // 切换工具时丢弃未确认的裁剪选区
+              _cropSession = null;
+              _cropSelecting = false;
+              _dragStart = null;
+              _dragNow = null;
+            }),
             borderRadius: BorderRadius.circular(8),
             child: Container(
               width: 56,
@@ -487,14 +581,7 @@ class _EditorPageState extends State<EditorPage> {
   Widget _canvas(EditorController ctrl) {
     return LayoutBuilder(builder: (context, box) {
       final canvas = box.biggest;
-      // 有效节点 = 已提交节点 + 滑杆预览（自由旋转拖动中即时呈现）
-      final previewDeg = ctrl.freeRotatePreview;
-      final effective = previewDeg == null
-          ? ctrl.pipeline.nodes
-          : [
-              ...ctrl.pipeline.nodes,
-              FilterNode(op: Ops.freeRotate, params: {'deg': previewDeg}),
-            ];
+      final effective = _effectiveNodes(ctrl);
       final out = sizeAfter(effective, ctrl.source.width, ctrl.source.height);
       final fit = math.min(canvas.width / out.w, canvas.height / out.h);
       final drawW = out.w * fit;
@@ -503,6 +590,20 @@ class _EditorPageState extends State<EditorPage> {
 
       // 求值前尺寸（拖拽覆盖层用原图坐标系）
       final imgSize = sizeAfter(const [], ctrl.source.width, ctrl.source.height);
+
+      // 裁剪选区：拖拽中的实时矩形优先，否则显示待确认会话选区
+      Rect? cropRel;
+      if (_tool == _Tool.crop) {
+        if (_dragStart != null && _dragNow != null) {
+          final a = _dragStart!, b = _dragNow!;
+          cropRel = Rect.fromLTRB(
+            math.min(a.dx, b.dx), math.min(a.dy, b.dy),
+            math.max(a.dx, b.dx), math.max(a.dy, b.dy),
+          );
+        } else {
+          cropRel = _cropSession;
+        }
+      }
 
       return GestureDetector(
         onTapDown: (_) {},
@@ -538,27 +639,36 @@ class _EditorPageState extends State<EditorPage> {
               }),
             ),
             // 透明棋盘格底（4.3.3）：由画布背景承担
-            if (_dragStart != null && _dragNow != null) _dragOverlay(topLeft, drawW, drawH),
+            if (_tool == _Tool.annotate && _dragStart != null && _dragNow != null)
+              _dragOverlay(topLeft),
+            // 裁剪选区预览（PS 式：选区外压暗 + 三分线，确认才生效）
+            if (cropRel != null && cropRel.width > 0 && cropRel.height > 0)
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _CropSessionPainter(
+                    sel: Rect.fromLTWH(
+                        topLeft.dx + cropRel.left * drawW,
+                        topLeft.dy + cropRel.top * drawH,
+                        cropRel.width * drawW,
+                        cropRel.height * drawH),
+                  ),
+                ),
+              ),
           ],
         ),
       );
     });
   }
 
-  Widget _dragOverlay(Offset topLeft, double drawW, double drawH) {
+  Widget _dragOverlay(Offset topLeft) {
     final a = _dragStart! + topLeft;
     final b = _dragNow! + topLeft;
     final rect = Rect.fromPoints(a, b);
-    final isCrop = _tool == _Tool.crop;
     return Positioned.fromRect(
       rect: rect,
       child: Container(
         decoration: BoxDecoration(
-          border: Border.all(
-              color: isCrop ? AppColors.accent : AppColors.danger, width: 1.5),
-          color: isCrop
-              ? Colors.white.withValues(alpha: 0.06)
-              : Colors.transparent,
+          border: Border.all(color: AppColors.danger, width: 1.5),
         ),
       ),
     );
@@ -585,7 +695,6 @@ class _EditorPageState extends State<EditorPage> {
       );
 
   Widget _cropProps() {
-    final src = _controller!.source;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -606,42 +715,66 @@ class _EditorPageState extends State<EditorPage> {
             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
         const SizedBox(height: 4),
         _FreeRotateControl(
+          currentDeg: _committedFreeRotateDeg(_controller!),
           onPreview: (deg) =>
               _controller?.setFreeRotatePreview(deg == 0 ? null : deg),
           onCommit: (deg) => _controller?.commitFreeRotate(deg),
         ),
         const SizedBox(height: 10),
         _panelTitle('裁剪'),
-        const Text('在画布上拖拽框选区域；常用比例：',
-            style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-        const SizedBox(height: 8),
         Wrap(
           spacing: 6,
           runSpacing: 6,
           children: [
-            for (final (label, ratio) in [('1:1', 1.0), ('4:3', 4 / 3), ('16:9', 16 / 9)])
+            FilledButton.tonal(
+              onPressed: _startFreeCrop,
+              child: const Text('自由裁剪'),
+            ),
+            for (final (label, ratio) in [
+              ('1:1', 1.0),
+              ('4:3', 4 / 3),
+              ('16:9', 16 / 9),
+            ])
               OutlinedButton(
-                onPressed: () {
-                  // 以画布中心按比例取最大框
-                  final size = _cropKey.currentContext?.size;
-                  if (size == null) return;
-                  final w = math.min(size.width, size.height * ratio);
-                  final h = w / ratio;
-                  final cx = size.width / 2, cy = size.height / 2;
-                  _dragStart = Offset(cx - w / 2, cy - h / 2);
-                  _dragNow = Offset(cx + w / 2, cy + h / 2);
-                  _onDragEnd(size, (w: src.width, h: src.height));
-                },
+                onPressed: () => _applyCropRatio(ratio),
                 child: Text(label),
               ),
           ],
         ),
+        const SizedBox(height: 8),
+        if (_cropSession != null) ...[
+          Builder(builder: (context) {
+            final ctrl = _controller!;
+            final out = sizeAfter(
+                _effectiveNodes(ctrl), ctrl.source.width, ctrl.source.height);
+            final w = (_cropSession!.width * out.w).round();
+            final h = (_cropSession!.height * out.h).round();
+            return Text('选区 $w × $h px，确认后生效',
+                style: const TextStyle(fontSize: 12));
+          }),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            children: [
+              FilledButton(
+                onPressed: _confirmCropSession,
+                child: const Text('应用裁剪 (Enter)'),
+              ),
+              OutlinedButton(
+                onPressed: _clearCropSession,
+                child: const Text('取消 (Esc)'),
+              ),
+            ],
+          ),
+        ] else
+          const Text('「自由裁剪」后在画布上拖出选区；比例按钮直接给出居中选区。',
+              style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
       ],
     );
   }
 
   Widget _slider(String label, double value, ValueChanged<double> onChanged,
-      {ValueChanged<double>? onChangeEnd}) {
+      {ValueChanged<double>? onChangeStart, ValueChanged<double>? onChangeEnd}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -658,6 +791,7 @@ class _EditorPageState extends State<EditorPage> {
           min: -1,
           max: 1,
           onChanged: onChanged,
+          onChangeStart: onChangeStart,
           onChangeEnd: onChangeEnd,
         ),
       ],
@@ -666,38 +800,37 @@ class _EditorPageState extends State<EditorPage> {
 
   Widget _adjustProps() {
     final ctrl = _controller!;
-    void pushPreview() {
-      final preview = {
-        for (final e in _adjustValues.entries) e.key: e.value,
-      };
-      ctrl.setAdjustPreview(
-          preview.values.every((v) => v == 0) ? null : preview);
-    }
+    // 滑杆常态显示已提交的合并值（不再归 0）；拖动会话内显示会话绝对值
+    final committed = mergedAdjustOf(ctrl.pipeline.nodes);
+    double valueOf(String key) =>
+        (_adjustDrag[key] ?? (committed[key] ?? 0)).clamp(-1, 1).toDouble();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _panelTitle('调整'),
         for (final (key, label) in _adjustKeys)
-          _slider(label, _adjustValues[key]!, (v) {
-            // 会话起点：首次拖动时快照已提交的合并值，松手提交差值
-            _adjustBaseline ??= mergedAdjustOf(ctrl.pipeline.nodes);
-            setState(() => _adjustValues[key] = v);
-            pushPreview();
-          }, onChangeEnd: (_) {
-            final baseline = _adjustBaseline ?? const <String, double>{};
-            final delta = <String, double>{
-              for (final e in _adjustValues.entries)
-                if ((e.value - (baseline[e.key] ?? 0)).abs() > 0.001)
-                  e.key: e.value - (baseline[e.key] ?? 0),
-            };
-            _adjustValues.updateAll((_, _) => 0);
-            _adjustBaseline = null;
-            ctrl.setAdjustPreview(null);
-            if (delta.isNotEmpty) _addNode(FilterNode(op: Ops.adjust, params: delta));
-          }),
+          _slider(label, valueOf(key), (v) {
+            setState(() => _adjustDrag[key] = v);
+            ctrl.setAdjustPreview({key: v});
+          },
+              onChangeStart: (v) {
+                // 会话起点：快照已提交的合并值，松手提交差值
+                _adjustBaseline ??= committed;
+                setState(() => _adjustDrag[key] = v);
+              },
+              onChangeEnd: (v) {
+                final baseline = _adjustBaseline?[key] ?? 0;
+                final delta = v - baseline;
+                _adjustDrag.remove(key);
+                if (_adjustDrag.isEmpty) _adjustBaseline = null;
+                ctrl.setAdjustPreview(null);
+                if (delta.abs() > 0.001) {
+                  _addNode(FilterNode(op: Ops.adjust, params: {key: delta}));
+                }
+              }),
         const SizedBox(height: 4),
-        const Text('拖动即时预览，松手自动生效；可叠加滤镜预设继续微调。',
+        const Text('拖动即时预览，松手生效；滑杆显示当前效果值，可继续微调。',
             style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
       ],
     );
@@ -821,15 +954,17 @@ class _CompareButtonState extends State<_CompareButton> {
   }
 }
 
-/// 自由旋转控制：滑杆 -180°~180°，拖动即时预览，松手提交（与栈尾
-/// 自由旋转节点合并，多次旋转不重复烘焙包围盒）。
+/// 自由旋转控制：滑杆显示当前累计角度；拖动即时预览，松手提交相对增量
+/// （与栈尾自由旋转节点合并，多次旋转不重复烘焙包围盒）。
 class _FreeRotateControl extends StatefulWidget {
   const _FreeRotateControl({
+    required this.currentDeg,
     required this.onPreview,
     required this.onCommit,
   });
 
-  final ValueChanged<double?> onPreview;
+  final double currentDeg; // 已提交的累计角度
+  final ValueChanged<double?> onPreview; // 相对已提交状态的追加角度
   final ValueChanged<double> onCommit;
 
   @override
@@ -837,10 +972,12 @@ class _FreeRotateControl extends StatefulWidget {
 }
 
 class _FreeRotateControlState extends State<_FreeRotateControl> {
-  double _deg = 0;
+  bool _dragging = false;
+  double _deg = 0; // 拖动会话内的绝对角度
 
   @override
   Widget build(BuildContext context) {
+    final value = _dragging ? _deg : widget.currentDeg;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -848,24 +985,31 @@ class _FreeRotateControlState extends State<_FreeRotateControl> {
           children: [
             Expanded(
               child: Slider(
-                value: _deg,
+                value: value.clamp(-180, 180).toDouble(),
                 min: -180,
                 max: 180,
                 divisions: 72, // 5° 步进
-                label: '${_deg.round()}°',
+                label: '${value.round()}°',
+                onChangeStart: (v) {
+                  _dragging = true;
+                  _deg = v;
+                },
                 onChanged: (v) {
                   setState(() => _deg = v);
-                  widget.onPreview(v); // 拖动中即时预览
+                  widget.onPreview(v - widget.currentDeg); // 拖动中即时预览
                 },
                 onChangeEnd: (v) {
-                  widget.onCommit(v); // 松手落栈（合并提交）
-                  setState(() => _deg = 0);
+                  widget.onCommit(v - widget.currentDeg); // 松手落栈（合并提交）
+                  setState(() {
+                    _dragging = false;
+                    _deg = 0;
+                  });
                 },
               ),
             ),
             SizedBox(
               width: 44,
-              child: Text('${_deg.round()}°',
+              child: Text('${value.round()}°',
                   style: const TextStyle(fontSize: 12)),
             ),
           ],
@@ -873,5 +1017,43 @@ class _FreeRotateControlState extends State<_FreeRotateControl> {
       ],
     );
   }
+}
+
+/// 裁剪选区预览：选区外压暗 + 强调色边框 + 三分参考线（确认前不入栈）。
+class _CropSessionPainter extends CustomPainter {
+  _CropSessionPainter({required this.sel});
+
+  final Rect sel;
+
+  @override
+  void paint(ui.Canvas canvas, ui.Size size) {
+    final full = ui.Offset.zero & size;
+    final path = ui.Path()
+      ..fillType = ui.PathFillType.evenOdd
+      ..addRect(full)
+      ..addRect(sel);
+    canvas.drawPath(path, ui.Paint()..color = const ui.Color(0x8A000000));
+
+    canvas.drawRect(
+        sel,
+        ui.Paint()
+          ..style = ui.PaintingStyle.stroke
+          ..strokeWidth = 1.5
+          ..color = const ui.Color(0xFF8B7CF6));
+    final third = sel.width / 3;
+    final gridPaint = ui.Paint()
+      ..style = ui.PaintingStyle.stroke
+      ..strokeWidth = 0.5
+      ..color = const ui.Color(0x40FFFFFF);
+    for (var i = 1; i <= 2; i++) {
+      canvas.drawLine(ui.Offset(sel.left + third * i, sel.top),
+          ui.Offset(sel.left + third * i, sel.bottom), gridPaint);
+      canvas.drawLine(ui.Offset(sel.left, sel.top + sel.height / 3 * i),
+          ui.Offset(sel.right, sel.top + sel.height / 3 * i), gridPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _CropSessionPainter old) => old.sel != sel;
 }
 

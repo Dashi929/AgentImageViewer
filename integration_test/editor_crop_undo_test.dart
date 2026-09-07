@@ -43,14 +43,24 @@ void main() {
       await tester.tap(find.byTooltip('裁剪'));
       await tester.pump(const Duration(milliseconds: 300));
       final genBefore = c.generation;
+      // 两阶段裁剪：先「自由裁剪」进入选区模式，拖拽出预览，再确认
+      await tester.tap(find.text('自由裁剪'));
+      await tester.pump(const Duration(milliseconds: 300));
+      final cropsBefore = c.pipeline.nodes.where((n) => n.op == Ops.crop).length;
       await tester.dragFrom(
         canvasCenter - Offset(120 + i * 5, 80),
         const Offset(200, 140),
       );
       await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('应用裁剪 (Enter)'), findsOneWidget,
+          reason: '拖拽后应有待确认选区预览');
+      expect(c.pipeline.nodes.where((n) => n.op == Ops.crop).length,
+          cropsBefore,
+          reason: '确认前不新增裁剪节点');
+      await tester.tap(find.text('应用裁剪 (Enter)'));
       await tester.pump(const Duration(milliseconds: 400));
       expect(c.pipeline.nodes.last.op, Ops.crop,
-          reason: '裁剪拖拽应产生 crop 节点');
+          reason: '确认后裁剪入栈');
       expect(c.generation, greaterThan(genBefore), reason: '裁剪后应重绘');
     }
 
