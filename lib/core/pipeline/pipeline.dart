@@ -30,6 +30,15 @@ class ImagePipeline {
     _nodes.add(node);
   }
 
+  /// 原地替换栈尾节点（滑杆类操作合并提交，只产生一条撤销记录）。
+  void replaceLast(FilterNode node) {
+    if (_nodes.isEmpty) throw StateError('replaceLast: 管线为空');
+    _pushUndo();
+    _nodes
+      ..removeLast()
+      ..add(node);
+  }
+
   /// 在指定位置插入（指令式处理常用）。
   void insert(int index, FilterNode node) {
     if (index < 0 || index > _nodes.length) {

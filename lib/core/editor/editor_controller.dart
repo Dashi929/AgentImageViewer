@@ -47,6 +47,63 @@ class EditorController extends ChangeNotifier {
   int generation = 0;
   bool get dirty => pipeline.toJson().isNotEmpty;
 
+  // ---------- 滑杆实时预览（不入栈；提交时与栈尾同类节点合并） ----------
+
+  double? _freeRotatePreview; // 本轮滑杆的追加角度（相对当前已提交状态）
+  Map<String, double>? _adjustPreview; // 本轮滑杆的绝对调整值（覆盖对应键）
+
+  /// 自由旋转拖动中的预览角度；null 表示无预览。
+  double? get freeRotatePreview => _freeRotatePreview;
+
+  /// 调整滑杆拖动中的预览值（键为 AdjustKeys）。
+  Map<String, double>? get adjustPreview => _adjustPreview;
+
+  void setFreeRotatePreview(double? deg) {
+    if (_freeRotatePreview == deg) return;
+    _freeRotatePreview = deg;
+    generation++;
+    notifyListeners();
+  }
+
+  void setAdjustPreview(Map<String, double>? params) {
+    final next = (params == null || params.values.every((v) => v == 0))
+        ? null
+        : Map<String, double>.unmodifiable(params);
+    _adjustPreview = next;
+    generation++;
+    notifyListeners();
+  }
+
+  /// 提交自由旋转：与栈尾 free_rotate 合并为一个节点（多次旋转只烘焙一次
+  /// 包围盒，避免内容越转越小），栈尾不是自由旋转时追加新节点。
+  Future<void> commitFreeRotate(double deg) async {
+    _freeRotatePreview = null;
+    final norm = _normDeg(deg);
+    if (norm == 0) {
+      generation++;
+      notifyListeners();
+      return;
+    }
+    final nodes = pipeline.nodes;
+    if (nodes.isNotEmpty && nodes.last.op == Ops.freeRotate) {
+      final last = nodes.last;
+      final total =
+          _normDeg((last.params['deg'] as num).toDouble() + norm);
+      pipeline.replaceLast(
+          FilterNode(op: Ops.freeRotate, params: {'deg': total}));
+    } else {
+      pipeline.add(FilterNode(op: Ops.freeRotate, params: {'deg': norm}));
+    }
+    generation++;
+    notifyListeners();
+  }
+
+  /// 归一化到 (-180, 180]。
+  static double _normDeg(double d) {
+    final r = ((d % 360) + 360) % 360;
+    return r > 180 ? r - 360 : r;
+  }
+
   Future<void> addNode(FilterNode node) async {
     pipeline.add(node);
     generation++;

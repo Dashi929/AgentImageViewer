@@ -42,6 +42,20 @@ class _EditorPageState extends State<EditorPage> {
   // 会抢在页面 autofocus 之前持有焦点，必须在就绪后显式 requestFocus。
   final FocusNode _focusNode = FocusNode(debugLabel: 'editor');
 
+  // 调整滑杆的会话值（须放在 State 上：拖动中控制器 notify 会整页重建，
+  // 放在 build 局部变量里滑杆会被重置回 0）
+  static const _adjustKeys = [
+    ('brightness', '亮度'),
+    ('contrast', '对比度'),
+    ('saturation', '饱和度'),
+    ('temperature', '色温'),
+    ('vignette', '暗角'),
+  ];
+  final Map<String, double> _adjustValues = {
+    for (final (k, _) in _adjustKeys) k: 0,
+  };
+  Map<String, double>? _adjustBaseline; // 会话开始时已提交的合并值
+
   // 裁剪/标注的拖拽状态（画布坐标，导出时换算相对比例）
   Offset? _dragStart;
   Offset? _dragNow;
@@ -101,15 +115,7 @@ class _EditorPageState extends State<EditorPage> {
 
   void _addRotate(int deg) => _addNode(FilterNode(op: Ops.rotate, params: {'deg': deg}));
 
-  /// 自由旋转（设计书 表 2-3：任意角度，包围盒扩展）
-  void _commitFreeRotate(double deg) =>
-      _addNode(FilterNode(op: Ops.freeRotate, params: {'deg': deg}));
   void _addFlip(String axis) => _addNode(FilterNode(op: Ops.flip, params: {'axis': axis}));
-
-  void _commitAdjust(Map<String, double> params) {
-    if (params.isEmpty) return;
-    _addNode(FilterNode(op: Ops.adjust, params: params));
-  }
 
   void _commitPreset(String name) => _addNode(FilterNode(op: Ops.preset, params: {'name': name}));
 
@@ -481,7 +487,15 @@ class _EditorPageState extends State<EditorPage> {
   Widget _canvas(EditorController ctrl) {
     return LayoutBuilder(builder: (context, box) {
       final canvas = box.biggest;
-      final out = sizeAfter(ctrl.pipeline.nodes, ctrl.source.width, ctrl.source.height);
+      // 有效节点 = 已提交节点 + 滑杆预览（自由旋转拖动中即时呈现）
+      final previewDeg = ctrl.freeRotatePreview;
+      final effective = previewDeg == null
+          ? ctrl.pipeline.nodes
+          : [
+              ...ctrl.pipeline.nodes,
+              FilterNode(op: Ops.freeRotate, params: {'deg': previewDeg}),
+            ];
+      final out = sizeAfter(effective, ctrl.source.width, ctrl.source.height);
       final fit = math.min(canvas.width / out.w, canvas.height / out.h);
       final drawW = out.w * fit;
       final drawH = out.h * fit;
@@ -503,13 +517,19 @@ class _EditorPageState extends State<EditorPage> {
               // drawImage+ColorFilter 不生效）；标注矢量在滤镜内侧绘制后
               // 一并被调色，与导出顺序略有差异（可接受，已注释）。
               child: Builder(builder: (context) {
-                final merged = mergedAdjustOf(ctrl.pipeline.nodes);
+                final merged = mergedAdjustOf(effective);
+                final pv = ctrl.adjustPreview;
+                if (pv != null) {
+                  merged
+                    ..removeWhere((k, _) => pv.containsKey(k))
+                    ..addAll(pv);
+                }
                 final filter = adjustColorFilter(merged);
                 final paintLayer = CustomPaint(
                   size: Size(drawW, drawH),
                   painter: EditorPreviewPainter(
                       source: ctrl.source,
-                      nodes: ctrl.pipeline.nodes,
+                      nodes: effective,
                       generation: ctrl.generation),
                 );
                 if (filter == null) return paintLayer;
@@ -585,7 +605,11 @@ class _EditorPageState extends State<EditorPage> {
         const Text('自由旋转',
             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
         const SizedBox(height: 4),
-        _FreeRotateControl(onApply: _commitFreeRotate),
+        _FreeRotateControl(
+          onPreview: (deg) =>
+              _controller?.setFreeRotatePreview(deg == 0 ? null : deg),
+          onCommit: (deg) => _controller?.commitFreeRotate(deg),
+        ),
         const SizedBox(height: 10),
         _panelTitle('裁剪'),
         const Text('在画布上拖拽框选区域；常用比例：',
@@ -616,7 +640,8 @@ class _EditorPageState extends State<EditorPage> {
     );
   }
 
-  Widget _slider(String label, double value, ValueChanged<double> onChanged) {
+  Widget _slider(String label, double value, ValueChanged<double> onChanged,
+      {ValueChanged<double>? onChangeEnd}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -633,38 +658,48 @@ class _EditorPageState extends State<EditorPage> {
           min: -1,
           max: 1,
           onChanged: onChanged,
+          onChangeEnd: onChangeEnd,
         ),
       ],
     );
   }
 
   Widget _adjustProps() {
-    double b = 0, c = 0, s = 0, t = 0, v = 0;
-    return StatefulBuilder(
-      builder: (context, setD) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _panelTitle('调整'),
-          _slider('亮度', b, (x) => setD(() => b = x)),
-          _slider('对比度', c, (x) => setD(() => c = x)),
-          _slider('饱和度', s, (x) => setD(() => s = x)),
-          _slider('色温', t, (x) => setD(() => t = x)),
-          _slider('暗角', v, (x) => setD(() => v = x)),
-          const SizedBox(height: 8),
-          FilledButton(
-            onPressed: () {
-              final params = <String, double>{};
-              if (b != 0) params['brightness'] = b;
-              if (c != 0) params['contrast'] = c;
-              if (s != 0) params['saturation'] = s;
-              if (t != 0) params['temperature'] = t;
-              if (v != 0) params['vignette'] = v;
-              _commitAdjust(params);
-            },
-            child: const Text('应用调整'),
-          ),
-        ],
-      ),
+    final ctrl = _controller!;
+    void pushPreview() {
+      final preview = {
+        for (final e in _adjustValues.entries) e.key: e.value,
+      };
+      ctrl.setAdjustPreview(
+          preview.values.every((v) => v == 0) ? null : preview);
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _panelTitle('调整'),
+        for (final (key, label) in _adjustKeys)
+          _slider(label, _adjustValues[key]!, (v) {
+            // 会话起点：首次拖动时快照已提交的合并值，松手提交差值
+            _adjustBaseline ??= mergedAdjustOf(ctrl.pipeline.nodes);
+            setState(() => _adjustValues[key] = v);
+            pushPreview();
+          }, onChangeEnd: (_) {
+            final baseline = _adjustBaseline ?? const <String, double>{};
+            final delta = <String, double>{
+              for (final e in _adjustValues.entries)
+                if ((e.value - (baseline[e.key] ?? 0)).abs() > 0.001)
+                  e.key: e.value - (baseline[e.key] ?? 0),
+            };
+            _adjustValues.updateAll((_, _) => 0);
+            _adjustBaseline = null;
+            ctrl.setAdjustPreview(null);
+            if (delta.isNotEmpty) _addNode(FilterNode(op: Ops.adjust, params: delta));
+          }),
+        const SizedBox(height: 4),
+        const Text('拖动即时预览，松手自动生效；可叠加滤镜预设继续微调。',
+            style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+      ],
     );
   }
 
@@ -786,11 +821,16 @@ class _CompareButtonState extends State<_CompareButton> {
   }
 }
 
-/// 自由旋转控制：滑杆 -180°~180°，实时显示角度，应用入栈。
+/// 自由旋转控制：滑杆 -180°~180°，拖动即时预览，松手提交（与栈尾
+/// 自由旋转节点合并，多次旋转不重复烘焙包围盒）。
 class _FreeRotateControl extends StatefulWidget {
-  const _FreeRotateControl({required this.onApply});
+  const _FreeRotateControl({
+    required this.onPreview,
+    required this.onCommit,
+  });
 
-  final ValueChanged<double> onApply;
+  final ValueChanged<double?> onPreview;
+  final ValueChanged<double> onCommit;
 
   @override
   State<_FreeRotateControl> createState() => _FreeRotateControlState();
@@ -813,7 +853,14 @@ class _FreeRotateControlState extends State<_FreeRotateControl> {
                 max: 180,
                 divisions: 72, // 5° 步进
                 label: '${_deg.round()}°',
-                onChanged: (v) => setState(() => _deg = v),
+                onChanged: (v) {
+                  setState(() => _deg = v);
+                  widget.onPreview(v); // 拖动中即时预览
+                },
+                onChangeEnd: (v) {
+                  widget.onCommit(v); // 松手落栈（合并提交）
+                  setState(() => _deg = 0);
+                },
               ),
             ),
             SizedBox(
@@ -822,16 +869,6 @@ class _FreeRotateControlState extends State<_FreeRotateControl> {
                   style: const TextStyle(fontSize: 12)),
             ),
           ],
-        ),
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton(
-            onPressed: _deg == 0 ? null : () {
-              widget.onApply(_deg);
-              setState(() => _deg = 0);
-            },
-            child: const Text('应用旋转'),
-          ),
         ),
       ],
     );
