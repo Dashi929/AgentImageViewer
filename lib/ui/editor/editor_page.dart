@@ -38,6 +38,10 @@ class _EditorPageState extends State<EditorPage> {
   String? _pinnedSourceKey; // 源图钉住：编辑期间禁止 LRU 淘汰释放
   String? _pinnedPreviewKey;
 
+  // 快捷键（Ctrl+Z/Y/S、Esc）依赖焦点在本页子树内；根壳的 autofocus
+  // 会抢在页面 autofocus 之前持有焦点，必须在就绪后显式 requestFocus。
+  final FocusNode _focusNode = FocusNode(debugLabel: 'editor');
+
   // 裁剪/标注的拖拽状态（画布坐标，导出时换算相对比例）
   Offset? _dragStart;
   Offset? _dragNow;
@@ -72,10 +76,14 @@ class _EditorPageState extends State<EditorPage> {
     );
     if (!mounted) return;
     setState(() => _controller = ctrl);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusNode.requestFocus();
+    });
   }
 
   @override
   void dispose() {
+    _focusNode.dispose();
     _controller?.dispose();
     final app = _appRef;
     final k1 = _pinnedSourceKey;
@@ -313,6 +321,7 @@ class _EditorPageState extends State<EditorPage> {
         const SingleActivator(LogicalKeyboardKey.keyS, control: true): _export,
       },
       child: Focus(
+        focusNode: _focusNode,
         autofocus: true,
         child: Scaffold(
           backgroundColor: AppColors.mainBg,

@@ -137,13 +137,17 @@ class _AgentImageViewerAppState extends State<AgentImageViewerApp>
             child: Scaffold(
               // 提供 Material 祖先：图库搜索框等 Material 组件必需
               backgroundColor: AppColors.mainBg,
-              body: Stack(
-                children: [
-                  AppShell(),
-                  // 自绘标题栏拖动区 + 窗口控制按钮（仅桌面显示）
-                  const _TitleBar(),
-                ],
-              ),
+              // 标题栏独占一行（内容从 36px 以下开始）：若悬浮覆盖在内容上，
+              // Stack 命中测试会让顶部 36px 内的所有按钮（编辑器撤销/导出、
+              // 浏览返回等）永远收不到鼠标事件
+              body: !Platform.isAndroid && !Platform.isIOS
+                  ? Column(
+                      children: [
+                        const _TitleBar(),
+                        Expanded(child: AppShell()),
+                      ],
+                    )
+                  : AppShell(),
             ),
           ),
         ),
@@ -170,10 +174,7 @@ class _TitleBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (Platform.isAndroid || Platform.isIOS) return const SizedBox.shrink();
-    return Positioned(
-      top: 0,
-      left: 0,
-      right: 0,
+    return SizedBox(
       height: 36,
       child: Row(
         children: [

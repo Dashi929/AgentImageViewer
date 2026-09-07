@@ -35,6 +35,10 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
       ViewerNavigator(count: widget.list.length, initial: widget.initialIndex);
   final ViewerState _view = ViewerState();
 
+  // 键盘导航（方向键/Del/F2 等）依赖焦点在本页子树内；根壳 autofocus
+  // 会抢在页面 autofocus 之前持有焦点，必须在挂载后显式 requestFocus。
+  final FocusNode _focusNode = FocusNode(debugLabel: 'viewer');
+
   ui.Image? _displayImage; // 当前呈现（先降采样后全量替换）
   String? _pinnedKey; // 当前显示条目的缓存引用
   int _displayRotateTurns = 0;
@@ -62,6 +66,9 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusNode.requestFocus();
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) => _openCurrent());
     _armHideTimer();
   }
@@ -490,6 +497,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _focusNode.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
     _slideTimer?.cancel();
@@ -551,6 +559,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
         const SingleActivator(LogicalKeyboardKey.f2): _renameCurrent,
       },
       child: Focus(
+        focusNode: _focusNode,
         autofocus: true,
         child: Scaffold(
           backgroundColor: AppColors.mainBg,
