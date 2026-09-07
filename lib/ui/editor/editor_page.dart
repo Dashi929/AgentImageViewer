@@ -45,6 +45,7 @@ class _EditorPageState extends State<EditorPage> {
   // 裁剪/标注的拖拽状态（画布坐标，导出时换算相对比例）
   Offset? _dragStart;
   Offset? _dragNow;
+  Offset? _panDownPos; // onDown 记录的真实按下位置（画布坐标）
   final List<Offset> _doodlePts = [];
 
   // 裁剪会话（PS 式两阶段：先出选区预览，确认才入栈生效）
@@ -614,11 +615,17 @@ class _EditorPageState extends State<EditorPage> {
         }
       }
 
-      return GestureDetector(
-        onTapDown: (_) {},
-        onPanStart: (d) => _onDragStart(d.localPosition - topLeft, canvas, imgSize),
-        onPanUpdate: (d) => _onDragUpdate(d.localPosition - topLeft),
-        onPanEnd: (_) => _onDragEnd(Size(drawW, drawH), imgSize),
+      return Listener(
+        // onPointerDown 记录真实按下位置：onPanStart 在手势竞争裁决（越过
+        // slop）时才触发，其 localPosition 是裁决时事件位置，快速拖动会
+        // 导致起点沿拖动方向偏移（拖动位置 ≠ 最终生成位置）
+        onPointerDown: (d) => _panDownPos = d.localPosition,
+        child: GestureDetector(
+          onTapDown: (_) {},
+          onPanStart: (d) =>
+              _onDragStart((_panDownPos ?? d.localPosition) - topLeft, canvas, imgSize),
+          onPanUpdate: (d) => _onDragUpdate(d.localPosition - topLeft),
+          onPanEnd: (_) => _onDragEnd(Size(drawW, drawH), imgSize),
         child: Stack(
           children: [
             Center(
@@ -673,6 +680,7 @@ class _EditorPageState extends State<EditorPage> {
                 ),
               ),
           ],
+        ),
         ),
       );
     });

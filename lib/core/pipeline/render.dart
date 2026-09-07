@@ -343,6 +343,8 @@ void paintAnnotateVectors(ui.Canvas c, ui.Size outSize, Map<String, Object?> par
 
 Future<ui.Image> _applyAnnotate(ui.Image img, Map<String, Object?> params) async {
   return _newCanvas(img.width, img.height, (c) {
+    // 先合成底图再叠加标注矢量（缺底图会导出「透明画布+标注块」）
+    c.drawImage(img, ui.Offset.zero, ui.Paint());
     paintAnnotateVectors(c, ui.Size(img.width.toDouble(), img.height.toDouble()), params);
   });
 }
