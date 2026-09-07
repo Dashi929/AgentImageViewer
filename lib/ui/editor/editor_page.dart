@@ -346,8 +346,10 @@ class _EditorPageState extends State<EditorPage> {
                 _addNode(FilterNode(op: Ops.annotate, params: {
                   'kind': AnnotateKinds.text,
                   'text': text,
-                  'x': box.left.clamp(0, 1),
-                  'y': box.top.clamp(0, 1),
+                  // box 为像素坐标，必须换算相对比例（曾直接 clamp 导致
+                  // 文字永远落在 (1,1) 右下角）
+                  'x': rx(box.left),
+                  'y': ry(box.top),
                   'size': fontSize,
                 }));
               }
