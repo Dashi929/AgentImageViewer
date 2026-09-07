@@ -332,18 +332,27 @@ class _EditorPageState extends State<EditorPage> {
     } else if (_tool == _Tool.annotate) {
       switch (_annotateKind) {
         case AnnotateKinds.text:
-          _promptText().then((text) {
-            if (text != null && text.isNotEmpty) {
-              _addNode(FilterNode(op: Ops.annotate, params: {
-                'kind': AnnotateKinds.text,
-                'text': text,
-                'x': rx(e.dx),
-                'y': ry(e.dy),
-                'size': 32,
-              }));
-            }
-            setState(() {});
-          });
+          // 拖出的虚线框 = 文字框：锚点取框左上角，字号由框高换算
+          final ctrl = _controller;
+          if (ctrl != null) {
+            final box = Rect.fromPoints(s, e);
+            final out = sizeAfter(
+                _effectiveNodes(ctrl), ctrl.source.width, ctrl.source.height);
+            final fit = canvasSize.width / out.w;
+            final fontSize = (box.height / fit).round().clamp(8, 400);
+            _promptText().then((text) {
+              if (text != null && text.isNotEmpty) {
+                _addNode(FilterNode(op: Ops.annotate, params: {
+                  'kind': AnnotateKinds.text,
+                  'text': text,
+                  'x': box.left.clamp(0, 1),
+                  'y': box.top.clamp(0, 1),
+                  'size': fontSize,
+                }));
+              }
+              setState(() {});
+            });
+          }
         case AnnotateKinds.doodle:
           if (_doodlePts.length > 1) {
             _addNode(FilterNode(op: Ops.annotate, params: {
@@ -640,7 +649,16 @@ class _EditorPageState extends State<EditorPage> {
             ),
             // 透明棋盘格底（4.3.3）：由画布背景承担
             if (_tool == _Tool.annotate && _dragStart != null && _dragNow != null)
-              _dragOverlay(topLeft),
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _AnnotateDragPainter(
+                    kind: _annotateKind,
+                    a: _dragStart! + topLeft,
+                    b: _dragNow! + topLeft,
+                    doodle: [for (final p in _doodlePts) p + topLeft],
+                  ),
+                ),
+              ),
             // 裁剪选区预览（PS 式：选区外压暗 + 三分线，确认才生效）
             if (cropRel != null && cropRel.width > 0 && cropRel.height > 0)
               Positioned.fill(
@@ -658,20 +676,6 @@ class _EditorPageState extends State<EditorPage> {
         ),
       );
     });
-  }
-
-  Widget _dragOverlay(Offset topLeft) {
-    final a = _dragStart! + topLeft;
-    final b = _dragNow! + topLeft;
-    final rect = Rect.fromPoints(a, b);
-    return Positioned.fromRect(
-      rect: rect,
-      child: Container(
-        decoration: BoxDecoration(
-          border: Border.all(color: AppColors.danger, width: 1.5),
-        ),
-      ),
-    );
   }
 
   Widget _propsPanel(EditorController ctrl, {bool wide = true}) {
@@ -891,7 +895,7 @@ class _EditorPageState extends State<EditorPage> {
           ],
         ),
         const SizedBox(height: 10),
-        const Text('在画布上拖拽绘制；「文字」点击落点后输入内容。',
+        const Text('拖拽即见即所得：箭头/线条按拖动轨迹预览；「文字」拖出虚线框后输入内容。',
             style: TextStyle(fontSize: 11, color: AppColors.textSecondary)),
       ],
     );
@@ -1017,6 +1021,99 @@ class _FreeRotateControlState extends State<_FreeRotateControl> {
       ],
     );
   }
+}
+
+/// 标注拖拽实时预览：视觉与已提交渲染（paintAnnotateVectors）一致——
+/// 矩形/椭圆描边、箭头线+箭头头部、涂鸦折线、马赛克半透明块、文字虚线框。
+class _AnnotateDragPainter extends CustomPainter {
+  _AnnotateDragPainter({
+    required this.kind,
+    required this.a,
+    required this.b,
+    required this.doodle,
+  });
+
+  final String kind;
+  final Offset a, b;
+  final List<Offset> doodle;
+
+  static const _accent = ui.Color(0xFFE5615C);
+
+  @override
+  void paint(ui.Canvas canvas, ui.Size size) {
+    final stroke = ui.Paint()
+      ..color = _accent
+      ..style = ui.PaintingStyle.stroke
+      ..strokeWidth = 2;
+    switch (kind) {
+      case AnnotateKinds.rect:
+        canvas.drawRect(Rect.fromPoints(a, b), stroke);
+      case AnnotateKinds.ellipse:
+        canvas.drawOval(Rect.fromPoints(a, b), stroke);
+      case AnnotateKinds.arrow:
+        _drawArrow(canvas, a, b, stroke);
+      case AnnotateKinds.mosaic:
+        canvas.drawRect(Rect.fromPoints(a, b),
+            ui.Paint()..color = const ui.Color(0x66000000));
+        _drawDashedRect(
+            canvas,
+            Rect.fromPoints(a, b),
+            ui.Paint()
+              ..style = ui.PaintingStyle.stroke
+              ..strokeWidth = 1
+              ..color = const ui.Color(0x66FFFFFF));
+      case AnnotateKinds.text:
+        _drawDashedRect(canvas, Rect.fromPoints(a, b), stroke);
+      case AnnotateKinds.doodle:
+        if (doodle.length > 1) {
+          final pen = ui.Paint()
+            ..color = _accent
+            ..style = ui.PaintingStyle.stroke
+            ..strokeWidth = 2
+            ..strokeCap = ui.StrokeCap.round;
+          for (var i = 1; i < doodle.length; i++) {
+            canvas.drawLine(doodle[i - 1], doodle[i], pen);
+          }
+        }
+    }
+  }
+
+  void _drawArrow(ui.Canvas canvas, ui.Offset from, ui.Offset to, ui.Paint paint) {
+    canvas.drawLine(from, to, paint);
+    final dir = to - from;
+    final len = dir.distance;
+    if (len <= 0) return;
+    ui.Offset rot(ui.Offset v, double ang) => ui.Offset(
+        v.dx * math.cos(ang) - v.dy * math.sin(ang),
+        v.dx * math.sin(ang) + v.dy * math.cos(ang));
+    final u = dir / len;
+    canvas.drawLine(to, to - rot(u, math.pi / 6) * 14, paint);
+    canvas.drawLine(to, to - rot(u, -math.pi / 6) * 14, paint);
+  }
+
+  void _drawDashedRect(ui.Canvas canvas, ui.Rect r, ui.Paint paint) {
+    const dash = 5.0, gap = 4.0;
+    void line(ui.Offset p1, ui.Offset p2) {
+      final total = (p2 - p1).distance;
+      if (total == 0) return;
+      final u = (p2 - p1) / total;
+      var d = 0.0;
+      while (d < total) {
+        final e = math.min(d + dash, total);
+        canvas.drawLine(p1 + u * d, p1 + u * e, paint);
+        d = e + gap;
+      }
+    }
+
+    line(r.topLeft, r.topRight);
+    line(r.topRight, r.bottomRight);
+    line(r.bottomRight, r.bottomLeft);
+    line(r.bottomLeft, r.topLeft);
+  }
+
+  @override
+  bool shouldRepaint(covariant _AnnotateDragPainter old) =>
+      old.kind != kind || old.a != a || old.b != b || old.doodle.length != doodle.length;
 }
 
 /// 裁剪选区预览：选区外压暗 + 强调色边框 + 三分参考线（确认前不入栈）。
