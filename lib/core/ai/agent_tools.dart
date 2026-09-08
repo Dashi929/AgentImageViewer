@@ -7,6 +7,7 @@ library;
 import 'dart:io';
 
 import '../db/library.dart';
+import '../scanner.dart';
 
 /// 「这张图」类指令解析：用户提到当前图（这张/当前/正在看/此图/它）且未给路径时，
 /// 注入当前浏览图片路径作为上下文。纯函数。
@@ -64,9 +65,14 @@ class AgentToolResult {
 }
 
 class AgentTools {
-  AgentTools({required this.library, required this.visionImageOfPath});
+  AgentTools({required this.library, required this.visionImageOfPath,
+      this.currentImages});
 
   final LibraryIndex library;
+
+  /// 当前浏览序列提供方（即时浏览：打标/检索作用于正在看的文件夹）。
+  final List<ImageEntry> Function()? currentImages;
+  List<ImageEntry> currentBrowseList() => currentImages?.call() ?? const [];
 
   /// 读取图片文件字节（供视觉模型）；由上层注入以复用缓存。
   final Future<List<int>> Function(String path) visionImageOfPath;
@@ -188,8 +194,9 @@ class AgentTools {
         final path = args['path'] as String?;
         final tags = (args['tags'] as List?)?.cast<String>() ?? const [];
         final title = args['title'] as String?;
-        final entry = library.entryAt(path ?? '');
-        if (entry == null) return AgentToolResult.error('图库中未找到：$path');
+        // 即时浏览：任意浏览中的图片可打标，库中无此条目则现登记
+        final entry = library.ensureEntry(path ?? '');
+        if (entry == null) return AgentToolResult.error('文件不存在：$path');
         for (final t in tags) {
           library.addTag(path!, t);
         }
@@ -202,8 +209,8 @@ class AgentTools {
       case 'organize_image':
         final path = args['path'] as String?;
         final category = args['category'] as String?;
-        final entry = library.entryAt(path ?? '');
-        if (entry == null) return AgentToolResult.error('图库中未找到：$path');
+        final entry = library.ensureEntry(path ?? '');
+        if (entry == null) return AgentToolResult.error('文件不存在：$path');
         library.setCategory(path!, category);
         await library.flush();
         return AgentToolResult.ok('已将 ${entry.name} 归入分类「$category」（虚拟）');
@@ -238,7 +245,8 @@ class AgentTools {
 
       case 'search_images':
         final query = args['query'] as String? ?? '';
-        final hits = library.search(query);
+        final scope = currentBrowseList();
+        final hits = library.search(query, inList: scope.isEmpty ? null : scope);
         return AgentToolResult.ok(
             '命中 ${hits.length} 张：${hits.take(20).map((e) => e.path).join('；')}');
 

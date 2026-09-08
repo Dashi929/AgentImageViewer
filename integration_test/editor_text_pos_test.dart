@@ -12,7 +12,7 @@ import 'package:agent_image_viewer/core/pipeline/node.dart';
 import 'package:agent_image_viewer/core/scanner.dart';
 import 'package:agent_image_viewer/main.dart' as app;
 import 'package:agent_image_viewer/ui/editor/editor_page.dart';
-import 'package:agent_image_viewer/ui/gallery/gallery_page.dart';
+import 'package:agent_image_viewer/ui/home/home_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -55,12 +55,11 @@ void main() {
 
     final testFile = File('${tmp.path}${Platform.pathSeparator}pos.png');
     await _writeSolidPng(testFile, 800, 600);
-    final ctx = tester.element(find.byType(GalleryPage));
+    final ctx = tester.element(find.byType(HomePage));
     final state = AppStateScope.of(ctx, listen: false);
     final entry = ImageEntry(
         path: testFile.path, name: 'pos.png', sizeBytes: 1, mtimeMs: 1);
     state.library.upsert(entry);
-    state.refreshGallery();
     await tester.pump(const Duration(milliseconds: 300));
 
     NavigatorStateEx.editor.value = entry;

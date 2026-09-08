@@ -84,6 +84,8 @@ class _AiPanelState extends State<AiPanel> {
         tools: AgentTools(
           library: app.library,
           visionImageOfPath: (path) => _readImageBytes(path),
+          // 即时浏览：打标/检索作用于当前浏览的文件夹序列
+          currentImages: () => NavigatorStateEx.viewer.value?.list ?? const [],
         ),
         visionModel: settings.visionModel,
         generative: gen,

@@ -8,7 +8,7 @@ import 'package:agent_image_viewer/core/editor/editor_controller.dart';
 import 'package:agent_image_viewer/core/pipeline/node.dart';
 import 'package:agent_image_viewer/main.dart' as app;
 import 'package:agent_image_viewer/ui/editor/editor_page.dart';
-import 'package:agent_image_viewer/ui/gallery/gallery_page.dart';
+import 'package:agent_image_viewer/ui/home/home_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -26,7 +26,7 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
     await tester.pump(const Duration(seconds: 1));
 
-    final ctx = tester.element(find.byType(GalleryPage));
+    final ctx = tester.element(find.byType(HomePage));
     final state = AppStateScope.of(ctx, listen: false);
     expect(state.library.entries, isNotEmpty);
     // 图库可能含已移出盘的失效条目（文件不存在 decode 会抛异常）：只取真实存在的

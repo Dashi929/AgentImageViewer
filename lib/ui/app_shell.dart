@@ -1,6 +1,7 @@
-/// 应用外壳：桌面「侧边栏 + 内容区」双栏（设计书 4.2 节）。
+/// 应用外壳：桌面「侧边栏 + 内容区」双栏。
 ///
-/// S0 阶段各导航页为占位，随后续里程碑逐个落地。
+/// v0.5 即时浏览：图库/标签页移除，保留 浏览（首页）/AI 助手/设置；
+/// 打开图片后整窗进入浏览视图。
 library;
 
 import 'dart:io' show Platform;
@@ -10,10 +11,9 @@ import 'package:flutter/material.dart';
 import '../../app_state.dart';
 import 'ai/ai_panel.dart';
 import 'editor/editor_page.dart';
-import 'gallery/gallery_page.dart';
-import 'gallery/tags_page.dart';
-import 'theme.dart';
+import 'home/home_page.dart';
 import 'settings/settings_page.dart';
+import 'theme.dart';
 import 'viewer/viewer_page.dart';
 
 class AppShell extends StatelessWidget {
@@ -22,15 +22,14 @@ class AppShell extends StatelessWidget {
 
   final bool desktop;
   final _items = const [
-    (NavTab.gallery, Icons.photo_library_outlined, '图库'),
-    (NavTab.tags, Icons.label_outline, '标签'),
+    (NavTab.home, Icons.photo_outlined, '浏览'),
     (NavTab.ai, Icons.auto_awesome_outlined, 'AI 助手'),
     (NavTab.settings, Icons.settings_outlined, '设置'),
   ];
 
   @override
   Widget build(BuildContext context) {
-    // 层级：编辑视图 > 浏览视图（全窗沉浸式，设计书 4.2）> 双栏外壳
+    // 层级：编辑视图 > 浏览视图（全窗沉浸式）> 双栏外壳
     return ValueListenableBuilder(
       valueListenable: NavigatorStateEx.editor,
       builder: (context, editing, _) {
@@ -61,7 +60,7 @@ class AppShell extends StatelessWidget {
     );
   }
 
-  /// 移动端：竖屏单栏 + 底部标签栏（设计书 4.5/表 4-2）
+  /// 移动端：竖屏单栏 + 底部标签栏
   Widget _mobileScaffold(NavTab tab, Widget content) {
     return Scaffold(
       body: SafeArea(child: content),
@@ -85,8 +84,7 @@ class AppShell extends StatelessWidget {
   }
 
   Widget _pageFor(NavTab tab) => switch (tab) {
-        NavTab.gallery => const GalleryPage(),
-        NavTab.tags => const TagsPage(),
+        NavTab.home => const HomePage(),
         NavTab.ai => const AiPanel(),
         NavTab.settings => const SettingsPage(),
       };
@@ -169,4 +167,3 @@ class _NavItem extends StatelessWidget {
     );
   }
 }
-

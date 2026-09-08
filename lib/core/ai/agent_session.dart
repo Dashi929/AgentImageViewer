@@ -152,11 +152,12 @@ class AgentSession {
     yield AgentError('达到最大工具轮次（$maxTurns），任务中止。');
   }
 
-  /// 批量打标任务：对图库全部图片逐张视觉识别，写入标签与虚拟标题。
+  /// 批量打标任务：对当前浏览文件夹（无浏览时回退本地库）逐张视觉识别，
+  /// 写入标签与虚拟标题。
   Stream<AgentEvent> _runBatchTag(String userText) async* {
-    final entries = tools.library.entries;
+    final entries = tools.currentBrowseList();
     if (entries.isEmpty) {
-      yield AgentError('图库为空，没有可打标的图片。');
+      yield AgentError('当前没有可打标的图片：请先打开一个文件夹再试。');
       return;
     }
     final tagger = VisionTagger(client);

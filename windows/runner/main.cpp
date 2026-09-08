@@ -39,5 +39,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   }
 
   ::CoUninitialize();
-  return EXIT_SUCCESS;
+  // windows_single_instance's pipe isolate blocks Flutter engine shutdown
+  // for 8+ seconds (measured), leaving the window frozen on screen after
+  // close. The viewer keeps no unsaved state (all JSON writes are atomic
+  // tmp+rename), so exit at the process level for instant close. The OS
+  // reclaims handles (mutex/pipe/COM) on process termination.
+  ::ExitProcess(EXIT_SUCCESS);
 }

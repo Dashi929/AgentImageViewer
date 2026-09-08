@@ -5,7 +5,7 @@ import 'package:agent_image_viewer/app_state.dart';
 import 'package:agent_image_viewer/core/editor/editor_controller.dart';
 import 'package:agent_image_viewer/main.dart' as app;
 import 'package:agent_image_viewer/ui/editor/editor_page.dart';
-import 'package:agent_image_viewer/ui/gallery/gallery_page.dart';
+import 'package:agent_image_viewer/ui/home/home_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -23,7 +23,7 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
 
     // 从图库取第一张图，直接打开编辑器（绕过浏览视图键盘依赖）
-    final ctx = tester.element(find.byType(GalleryPage));
+    final ctx = tester.element(find.byType(HomePage));
     final state = AppStateScope.of(ctx, listen: false);
     expect(state.library.entries, isNotEmpty, reason: '图库应有图片');
     // 图库可能含已移出盘的失效条目（文件不存在 decode 会抛异常）：只取真实存在的

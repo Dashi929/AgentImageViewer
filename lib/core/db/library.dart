@@ -28,7 +28,30 @@ class LibraryIndex {
   }
 
   List<String> get folders => List.unmodifiable(_folders);
+
+  /// 「从图库移除」的路径集合（即时浏览扫描时继续跳过这些历史隐藏项）。
+  Set<String> get hiddenPaths => Set.unmodifiable(_hidden);
+
   ImageEntry? entryAt(String path) => _byPath[path];
+
+  /// 若库中没有 [path] 则按文件现状登记一条（AI 打标/虚拟重命名
+  /// 对任意浏览图片生效，不再要求先进图库）。
+  /// 文件不存在返回 null。
+  ImageEntry? ensureEntry(String path) {
+    final existing = _byPath[path];
+    if (existing != null) return existing;
+    final f = File(path);
+    if (!f.existsSync()) return null;
+    final st = f.statSync();
+    final entry = ImageEntry(
+      path: path,
+      name: path.split(Platform.pathSeparator).last,
+      sizeBytes: st.size,
+      mtimeMs: st.modified.millisecondsSinceEpoch,
+    );
+    upsert(entry);
+    return entry;
+  }
 
   Future<void> load() async {
     final data = await _store.load('library.json');
@@ -161,11 +184,13 @@ class LibraryIndex {
   }
 
   /// 多条件搜索：空格分隔，文件名/虚拟名/标签/文件夹均可命中。
-  List<ImageEntry> search(String query) {
+  /// 传 [inList] 时只在该范围内搜（即时浏览：当前文件夹）。
+  List<ImageEntry> search(String query, {List<ImageEntry>? inList}) {
+    final base = inList ?? entries;
     final q = query.trim();
-    if (q.isEmpty) return entries;
+    if (q.isEmpty) return base;
     final terms = q.toLowerCase().split(RegExp(r'\s+'));
-    return entries.where((e) {
+    return base.where((e) {
       final hay =
           '${e.name} ${e.displayName} ${e.tags.join(' ')} ${e.path}'.toLowerCase();
       return terms.every(hay.contains);

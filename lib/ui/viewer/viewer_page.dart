@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../app_state.dart';
+import '../../core/browser/folder_browser.dart';
 import '../../core/image/exif.dart';
 import '../../core/image/image_manager.dart';
 import '../../core/scanner.dart';
@@ -39,8 +40,8 @@ class ViewerPage extends StatefulWidget {
 }
 
 class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
-  late final ViewerNavigator _nav =
-      ViewerNavigator(count: widget.list.length, initial: widget.initialIndex);
+  late ViewerNavigator _nav;
+
   final ViewerState _view = ViewerState();
 
   // 键盘导航（方向键/Del/F2 等）依赖焦点在本页子树内；根壳 autofocus
@@ -79,9 +80,20 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
   Timer? _slideTimer;
   final math.Random _slideRng = math.Random();
 
+  // 文件夹边界导航：第一按提示、短窗内再按一次跳相邻文件夹。
+  // 300ms 下限吸收双击/连按误触；3s 上限之外视为新的第一按。
+  static const _boundaryArmMin = Duration(milliseconds: 300);
+  static const _boundaryArmMax = Duration(seconds: 3);
+  bool? _boundaryDir; // true=向前(→)
+  DateTime? _boundaryAt;
+  bool _jumping = false;
+  List<String>? _foldersAround; // 当前文件夹的同级图片文件夹序列（含自身）
+
   @override
   void initState() {
     super.initState();
+    _nav = ViewerNavigator(
+        count: widget.list.length, initial: widget.initialIndex);
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _focusNode.requestFocus();
@@ -105,6 +117,24 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
       default:
         break;
     }
+  }
+
+  /// 外部替换浏览序列（二次双击新图 / 跨文件夹跳转）：
+  /// 重建导航并打开新图；跨文件夹时同级文件夹缓存作废。
+  @override
+  void didUpdateWidget(covariant ViewerPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (identical(widget.list, oldWidget.list)) return;
+    _nav = ViewerNavigator(
+        count: widget.list.length, initial: widget.initialIndex);
+    _boundaryDir = null;
+    _boundaryAt = null;
+    String? folderOf(List<ImageEntry> l) =>
+        l.isEmpty ? null : FolderBrowser.parentOf(l.first.path);
+    if (folderOf(oldWidget.list) != folderOf(widget.list)) {
+      _foldersAround = null;
+    }
+    _openCurrent();
   }
 
   ImageEntry get _entry => widget.list[_nav.index];
@@ -224,6 +254,8 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
   /// F2 虚拟重命名当前图（设计书 5.3：虚拟操作，不修改真实文件）
   Future<void> _renameCurrent() async {
     final e = _entry;
+    // 任意浏览图片都可虚拟命名：库中无此条目时先登记
+    _app.library.ensureEntry(e.path);
     _renameCtrl = TextEditingController(text: e.virtualName ?? e.name);
     final name = await showDialog<String>(
       context: context,
@@ -247,31 +279,27 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
-  /// Del：从图库移除当前图（虚拟删除，本地文件保留，设计书 5.3）。
+  /// Del：从本次浏览列表移除当前图（虚拟操作，本地文件保留）。
   Future<void> _deleteCurrent() async {
     final path = _entry.path;
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('从图库删除'),
-        content: const Text('仅从图库移除此图，不删除本地文件。'),
+        title: const Text('从浏览列表移除'),
+        content: const Text('仅从本次浏览列表移除，不删除本地文件。'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
               child: const Text('取消')),
           FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('删除')),
+              child: const Text('移除')),
         ],
       ),
     );
     if (ok != true || !mounted) return;
-    _app.library.hideEntry(path);
-    await _app.library.flush();
-    if (!mounted) return;
-    _showOsd('已从图库移除（本地文件保留）');
-    _app.refreshGallery();
-    // 从当前列表移除并接续显示；若空则回图库
+    _showOsd('已从浏览列表移除（本地文件保留）');
+    // 从当前列表移除并接续显示；若空则回主页
     widget.list.removeWhere((e) => e.path == path);
     if (widget.list.isEmpty) {
       NavigatorStateEx.closeViewer();
@@ -441,9 +469,91 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     }
   }
 
+  /// 左右导航（不循环）：到边界第一次按键给提示，短窗内再按一次
+  /// 跳进相邻的同级图片文件夹（上一文件夹落到末张，下一文件夹落到首张）。
   void _navigate(bool forward) {
-    final moved = forward ? _nav.next() : _nav.previous();
-    if (moved) _openCurrent();
+    final moved = forward ? _nav.next(loop: false) : _nav.previous(loop: false);
+    if (moved) {
+      _boundaryDir = null;
+      _boundaryAt = null;
+      _openCurrent();
+      return;
+    }
+    unawaited(_onBoundary(forward));
+  }
+
+  Future<void> _onBoundary(bool forward) async {
+    final now = DateTime.now();
+    final armed = _boundaryDir == forward &&
+        _boundaryAt != null &&
+        now.difference(_boundaryAt!) >= _boundaryArmMin &&
+        now.difference(_boundaryAt!) <= _boundaryArmMax;
+    _boundaryDir = forward;
+    _boundaryAt = now;
+    if (armed) {
+      await _jumpSiblingFolder(forward);
+      return;
+    }
+    // 提示：带出相邻文件夹名（同级扫描有缓存，通常瞬间返回）
+    final folders = await _imageFoldersAround();
+    if (!mounted) return;
+    final neighbor = neighborImageFolder(
+        folders, FolderBrowser.parentOf(_entry.path),
+        forward: forward);
+    if (neighbor == null) {
+      _showOsd(forward ? '已是最后一个图片文件夹' : '已是第一个图片文件夹',
+          duration: const Duration(seconds: 2));
+    } else {
+      _showOsd(
+          forward
+              ? '已是最后一张，再按 → 进入「${FolderBrowser.nameOf(neighbor)}」'
+              : '已是第一张，再按 ← 进入「${FolderBrowser.nameOf(neighbor)}」',
+          duration: const Duration(seconds: 2));
+    }
+  }
+
+  /// 同级图片文件夹序列（含当前文件夹，自然排序；带缓存）。
+  Future<List<String>> _imageFoldersAround() async {
+    final cached = _foldersAround;
+    if (cached != null) return cached;
+    final folders = await FolderBrowser.imageFoldersAround(
+        FolderBrowser.parentOf(_entry.path));
+    _foldersAround = folders;
+    return folders;
+  }
+
+  Future<void> _jumpSiblingFolder(bool forward) async {
+    if (_jumping) return;
+    _jumping = true;
+    try {
+      final folders = await _imageFoldersAround();
+      if (!mounted) return;
+      final current = FolderBrowser.parentOf(_entry.path);
+      final target =
+          neighborImageFolder(folders, current, forward: forward);
+      if (target == null) {
+        _showOsd(forward ? '已是最后一个图片文件夹' : '已是第一个图片文件夹',
+            duration: const Duration(seconds: 2));
+        return;
+      }
+      final list = await FolderBrowser.listImages(target,
+          hidden: _app.library.hiddenPaths);
+      if (!mounted) return;
+      if (list.isEmpty) {
+        _showOsd('「${FolderBrowser.nameOf(target)}」里没有图片');
+        return;
+      }
+      NavigatorStateEx.openViewer(list, forward ? 0 : list.length - 1);
+      // didUpdateWidget（下一帧）会因文件夹变更清缓存，这里回填本次扫描结果
+      _foldersAround = folders;
+      _boundaryDir = null;
+      _boundaryAt = null;
+      _showOsd('已进入「${FolderBrowser.nameOf(target)}」');
+    } catch (_) {
+      if (mounted) _showOsd('文件夹跳转失败');
+    } finally {
+      _jumping = false;
+    }
   }
 
   Future<void> _safePrefetch(String path, int mtimeMs, int target) async {
@@ -510,11 +620,11 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     _armHideTimer();
   }
 
-  void _showOsd(String text) {
+  void _showOsd(String text, {Duration duration = const Duration(milliseconds: 800)}) {
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(SnackBar(
-        duration: const Duration(milliseconds: 800),
+        duration: duration,
         behavior: SnackBarBehavior.floating,
         backgroundColor: AppColors.overlay,
         content: Center(child: Text(text, style: const TextStyle(fontSize: 13))),
@@ -675,7 +785,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
               _navigate(false);
             } else if (d.velocity.pixelsPerSecond.dy < -800 &&
                 _swipeAccum.dy < -80) {
-              NavigatorStateEx.closeViewer(); // 底部上滑返回图库
+              NavigatorStateEx.closeViewer(); // 底部上滑返回主页
             }
           }
           _swipeAccum = Offset.zero;
@@ -755,11 +865,11 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
           IconButton(
             onPressed: NavigatorStateEx.closeViewer,
             icon: const Icon(Icons.arrow_back, size: 20),
-            tooltip: '返回图库 (Esc)',
+            tooltip: '返回主页 (Esc)',
           ),
           Expanded(
             child: Text(
-              '${_entry.name}  ·  ${_entry.width ?? '?'}×${_entry.height ?? '?'}',
+              '${_entry.displayName}  ·  ${_entry.width ?? '?'}×${_entry.height ?? '?'}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
@@ -811,7 +921,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
             NavigatorStateEx.editor.value = _entry;
           }),
           _barBtn(Icons.info_outline, '信息 (I)', _toggleInfo),
-          _barBtn(Icons.delete_outline, '从图库删除 (Del)', _deleteCurrent),
+          _barBtn(Icons.delete_outline, '从列表移除 (Del)', _deleteCurrent),
           const VerticalDivider(width: 12, indent: 12, endIndent: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),

@@ -1,13 +1,15 @@
-/// 应用状态：路径、图库、解码管理器与全局导航（对照参考工程 app_state.dart）。
+/// 应用状态：数据目录、本地库（AI 虚拟操作用）、解码管理器与全局导航。
+///
+/// v0.5 即时浏览改造：图库（扫描入库/监控文件夹）已移除，
+/// 打开即按「所在文件夹」浏览。
 library;
 
 import 'dart:io';
 
-import 'dart:async';
-
 import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'core/browser/folder_browser.dart';
 import 'core/db/json_store.dart';
 import 'core/db/library.dart';
 import 'core/image/image_manager.dart';
@@ -35,14 +37,11 @@ class AppState extends ChangeNotifier {
     await library.load();
     final thumbs = Directory('${dataDir.path}${Platform.pathSeparator}cache'
         '${Platform.pathSeparator}thumbs');
-    final state = AppState._(
+    return AppState._(
       dataDir: dataDir,
       library: library,
       images: ImageManager(thumbCacheDir: thumbs),
     );
-    // 启动时后台重扫监控目录（文件增删、跨会话变化）
-    unawaited(state.rescan());
-    return state;
   }
 
   /// 测试专用构造（绕过 path_provider）。
@@ -60,17 +59,6 @@ class AppState extends ChangeNotifier {
     );
   }
 
-  /// 添加监控文件夹并立即扫描入库。
-  Future<List<ImageEntry>> addFolder(String path) async {
-    await library.addFolder(path);
-    return library.scanFolderInto(path);
-  }
-
-  Future<void> rescan() async {
-    await library.rescan();
-    notifyListeners(); // 后台重扫完成后刷新图库 UI
-  }
-
   /// 共享 JsonStore（编辑栈等持久化用）。
   JsonStore get store => library.store;
 
@@ -85,34 +73,53 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 外部双击打开的图片：登记进图库并直接进入浏览（设计书 6.1）。
-  Future<void> registerExternalOpen(String path) async {
-    if (!File(path).existsSync()) return;
-    final st = await File(path).stat();
-    library.upsert(ImageEntry(
-      path: path,
-      name: path.split(Platform.pathSeparator).last,
-      sizeBytes: st.size,
-      mtimeMs: st.modified.millisecondsSinceEpoch,
-    ));
-    await library.flush();
-    final entry = library.entryAt(path);
-    if (entry != null) {
-      NavigatorStateEx.openViewer([entry], 0);
+  /// 打开单张图片（首页/外部双击）：按其所在文件夹建立浏览序列并定位到该图。
+  /// 返回错误文案；null 表示成功。
+  Future<String?> openFile(String path) async {
+    final normalized = FolderBrowser.normalize(path);
+    if (!File(normalized).existsSync()) return '文件不存在：$path';
+    final folder = FolderBrowser.parentOf(normalized);
+    final list = await FolderBrowser.listImages(folder,
+        hidden: library.hiddenPaths);
+    if (list.isEmpty) {
+      final e = await _entryFromFile(normalized);
+      if (e == null) return '文件不存在：$path';
+      NavigatorStateEx.openViewer([e], 0);
+      return null;
     }
+    final idx = list.indexWhere((e) => e.path == normalized);
+    NavigatorStateEx.openViewer(list, idx < 0 ? 0 : idx);
+    return null;
   }
 
-  /// 标签页 → 图库的搜索词传递。
-  final pendingSearch = ValueNotifier<String>('');
-  void pendGallerySearch(String q) => pendingSearch.value = q;
+  /// 打开文件夹（首页）：列出文件夹内图片进入浏览。返回错误文案；null 成功。
+  Future<String?> openFolder(String path) async {
+    final list = await FolderBrowser.listImages(FolderBrowser.normalize(path),
+        hidden: library.hiddenPaths);
+    if (list.isEmpty) return '该文件夹没有可显示的图片';
+    NavigatorStateEx.openViewer(list, 0);
+    return null;
+  }
 
-  /// 图库数据（标签/收藏等）变更后的公开刷新入口。
-  void refreshGallery() => notifyListeners();
+  /// 外部双击打开的图片：直接进入所在文件夹浏览（设计书 6.1）。
+  Future<void> registerExternalOpen(String path) => openFile(path);
 
   @override
   void dispose() {
     images.dispose();
     super.dispose();
+  }
+
+  static Future<ImageEntry?> _entryFromFile(String path) async {
+    final f = File(path);
+    if (!await f.exists()) return null;
+    final st = await f.stat();
+    return ImageEntry(
+      path: path,
+      name: FolderBrowser.nameOf(path),
+      sizeBytes: st.size,
+      mtimeMs: st.modified.millisecondsSinceEpoch,
+    );
   }
 }
 
@@ -129,12 +136,12 @@ class AppStateScope extends InheritedNotifier<AppState> {
   }
 }
 
-/// 全局导航（图库↔浏览视图切换）。
-enum NavTab { gallery, tags, ai, settings }
+/// 全局导航（主页 ↔ 浏览视图切换）。
+enum NavTab { home, ai, settings }
 
 class NavigatorStateEx {
   NavigatorStateEx._();
-  static final currentTab = ValueNotifier<NavTab>(NavTab.gallery);
+  static final currentTab = ValueNotifier<NavTab>(NavTab.home);
 
   /// 浏览视图当前打开的文件序列与起点；null 表示未在浏览。
   static final ValueNotifier<({List<ImageEntry> list, int index})?> viewer =
@@ -143,7 +150,10 @@ class NavigatorStateEx {
   static void openViewer(List<ImageEntry> list, int index) =>
       viewer.value = (list: list, index: index.clamp(0, list.length - 1));
 
-  static void closeViewer() => viewer.value = null;
+  static void closeViewer() {
+    viewer.value = null;
+    currentTab.value = NavTab.home;
+  }
 
   /// 编辑视图当前条目；null 表示未在编辑。
   static final ValueNotifier<ImageEntry?> editor = ValueNotifier(null);
