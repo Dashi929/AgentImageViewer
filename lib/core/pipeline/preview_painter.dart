@@ -1,11 +1,11 @@
 /// 编辑器预览 painter：屏幕画布直绘（源位图 drawImage + 矢量叠加）。
 ///
-/// 不生成中间位图（绕开离屏合成在各后端的显示问题），
-/// 滑杆/标注实时无位图分配；导出仍走离屏管线精确合成。
+/// 不生成整幅中间位图（绕开离屏合成在各后端的显示问题），
+/// 滑杆/标注实时无大位图分配；导出仍走离屏管线精确合成。
 /// 几何变换与导出管线（render.dart）逐节点同构：以「源像素 → 输出画布」
 /// 内容映射矩阵（[nodeGeometryMatrix]）变换后 1:1 绘制源图。标注矢量绘制在
-/// 输出画布坐标系（fit 缩放 + off 平移已应用），马赛克以图像滤镜真实
-/// 像素化，与导出观感一致。
+/// 输出画布坐标系（fit 缩放 + off 平移已应用），马赛克以「块网格小图降采样
+/// →无插值放大」真实像素化（与导出 _applyMosaic 同机制）。
 library;
 
 import 'dart:math' as math;
@@ -153,14 +153,6 @@ Matrix4 nodeGeometryMatrix(List<FilterNode> nodes, double srcW, double srcH) {
   return m;
 }
 
-/// 矩阵列向量的 2D 长度（axis: 0=x 基, 1=y 基）＝该轴的总缩放。
-/// 旋转不改列长，含自由旋转的链同样适用。
-double _columnScale(Matrix4 m, int axis) {
-  final s = m.storage;
-  final x = s[axis * 4], y = s[axis * 4 + 1];
-  return math.sqrt(x * x + y * y);
-}
-
 /// 马赛克预览：与导出一致的块状像素化（块边长以输出画布像素计）。
 void _paintMosaic(ui.Canvas canvas, ui.Image source, Matrix4 geo,
     ui.Size out, Map<String, Object?> params) {
@@ -175,37 +167,34 @@ void _paintMosaic(ui.Canvas canvas, ui.Image source, Matrix4 geo,
 }
 
 /// 在「输出画布坐标系」的画布上绘制马赛克像素化区域（提交预览与
-/// 拖拽实时预览共用）。实现：clip 到矩形后把源图经几何映射重画一遍，
-/// 绘制时叠加「缩小(双线性)→放大(无插值)」复合图像滤镜——纯画布操作，
-/// 无离屏位图，块内容取样自真实像素，与导出观感一致。
+/// 拖拽实时预览共用）。实现与导出 [_applyMosaic] 同机制：把「源图经几何
+/// 映射后落在 rect 内的内容」降采样到 gw×gh 块网格小图（toImageSync，
+/// 网格为马赛克块数、百像素级），再无插值放大回 rect——块内容取样自
+/// 真实像素，块内同色。
+/// （compose「缩小→放大」图像滤镜方案在软件渲染/flutter_test 下正常，
+/// 真实 GPU 后端 Windows/Android Impeller 实测完全不生效，弃用。）
 void paintMosaicRegion(ui.Canvas canvas,
     {required ui.Image source,
     required Matrix4 geo,
     required ui.Rect rect,
     required ui.Size out}) {
   final bs = mosaicBlockSize(out.width, out.height).toDouble();
-  final bsx = math.max(1.0, bs / _columnScale(geo, 0)); // 源像素块边长
-  final bsy = math.max(1.0, bs / _columnScale(geo, 1));
-  final pixelate = ui.Paint()
-    ..filterQuality = ui.FilterQuality.medium
-    ..imageFilter = ui.ImageFilter.compose(
-      outer: _scaleImageFilter(bsx, bsy, ui.FilterQuality.none),
-      inner: _scaleImageFilter(1 / bsx, 1 / bsy, ui.FilterQuality.medium),
-    );
-
-  canvas.save();
-  canvas.clipRect(rect);
-  canvas.save();
-  canvas.transform(geo.storage);
-  canvas.drawImage(source, ui.Offset.zero, pixelate);
-  canvas.restore();
-  canvas.restore();
+  final gw = math.max(1, (rect.width / bs).round());
+  final gh = math.max(1, (rect.height / bs).round());
+  final small = newCanvasSync(gw, gh, (sc) {
+    // 源像素 --geo--> 输出画布 --平移 rect--> --缩放--> 块网格
+    sc.scale(gw / rect.width, gh / rect.height);
+    sc.translate(-rect.left, -rect.top);
+    sc.transform(geo.storage);
+    sc.drawImage(source, ui.Offset.zero,
+        ui.Paint()..filterQuality = ui.FilterQuality.medium);
+  });
+  canvas.drawImageRect(
+      small,
+      ui.Offset.zero & ui.Size(gw.toDouble(), gh.toDouble()),
+      rect,
+      ui.Paint()..filterQuality = ui.FilterQuality.none);
 }
-
-/// 纯缩放矩阵图像滤镜（本 SDK 无 ImageFilter.scale，用 matrix 等价）。
-ui.ImageFilter _scaleImageFilter(double sx, double sy, ui.FilterQuality q) =>
-    ui.ImageFilter.matrix((Matrix4.identity()..scaleByDouble(sx, sy, 1.0, 1.0)).storage,
-        filterQuality: q);
 
 /// 任意角度旋转的包围盒帧尺寸。
 (double, double) _freeRotatedSize(double w, double h, double deg) {

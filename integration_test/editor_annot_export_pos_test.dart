@@ -1,6 +1,8 @@
 // 真机集成测试：标注拖拽位置必须与最终导出结果一致（像素级）。
-// 流程：自建纯亮色测试图入库 → 编辑器中在已知相对位置拖马赛克 → 导出 PNG
-// → 与原图逐像素对比，压暗区域包围盒必须落在拖拽相对区域内。
+// 流程：自建黑白条纹测试图入库 → 编辑器中在已知相对位置拖马赛克 → 导出 PNG
+// → 与原图逐像素对比，像素化差异区域包围盒必须落在拖拽相对区域内。
+// （测试图必须是条纹而非纯色：真实像素化对纯色区域输出不变、差异恒为零，
+// 旧「压暗区域」断言是半透明黑块假实现时代的产物。）
 // 运行: flutter test integration_test/editor_annot_export_pos_test.dart -d windows
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -17,11 +19,17 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
-Future<void> _writeSolidPng(File f, int w, int h) async {
+/// 2px 白条黑底竖条纹（真实像素化后块内颜色与源条纹必然强差异）。
+Future<void> _writeStripePng(File f, int w, int h) async {
   final rec = ui.PictureRecorder();
   final c = ui.Canvas(rec, ui.Offset.zero & ui.Size(w.toDouble(), h.toDouble()));
   c.drawRect(ui.Offset.zero & ui.Size(w.toDouble(), h.toDouble()),
-      ui.Paint()..color = const ui.Color(0xFFE6E6E6));
+      ui.Paint()..color = const ui.Color(0xFF000000));
+  for (var x = 0; x < w; x += 4) {
+    c.drawRect(
+        ui.Offset(x.toDouble(), 0) & ui.Size(2, h.toDouble()),
+        ui.Paint()..color = const ui.Color(0xFFFFFFFF));
+  }
   final img = await rec.endRecording().toImage(w, h);
   final data = await img.toByteData(format: ui.ImageByteFormat.png);
   await f.writeAsBytes(data!.buffer.asUint8List());
@@ -54,9 +62,9 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
     await tester.pump(const Duration(seconds: 1));
 
-    // 自建测试图入库（纯亮色，马赛克压暗后差异明显且可控）
+    // 自建测试图入库（黑白条纹：马赛克像素化后与源差异明显且可控）
     final testFile = File('${tmp.path}${Platform.pathSeparator}pos.png');
-    await _writeSolidPng(testFile, 800, 600);
+    await _writeStripePng(testFile, 800, 600);
     final ctx = tester.element(find.byType(GalleryPage));
     final state = AppStateScope.of(ctx, listen: false);
     final entry = ImageEntry(
@@ -120,7 +128,7 @@ void main() {
         '${testFile.path.substring(0, testFile.path.lastIndexOf('.'))}_edited.png');
     expect(exported.existsSync(), isTrue, reason: '导出文件应存在');
 
-    // 逐像素对比：压暗差异区域的包围盒
+    // 逐像素对比：像素化差异区域的包围盒
     final (outPixels, w, h) = await _decodePixels(exported.path);
     var minX = 1 << 30, minY = 1 << 30, maxX = -1, maxY = -1;
     for (var y = 0; y < h; y++) {
@@ -137,7 +145,7 @@ void main() {
         }
       }
     }
-    expect(maxX, greaterThan(minX), reason: '应检测到马赛克差异区域');
+    expect(maxX, greaterThan(minX), reason: '应检测到马赛克像素化差异区域');
     // ignore: avoid_print
     print('DEBUG exported=${w}x$h diffBBox=($minX,$minY)-($maxX,$maxY)');
     final rw = w.toDouble(), rh = h.toDouble();

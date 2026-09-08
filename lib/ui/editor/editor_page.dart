@@ -341,6 +341,20 @@ class _EditorPageState extends State<EditorPage> {
         _cropSession = Rect.fromLTRB(left, top, right, bottom);
       }
     } else if (_tool == _Tool.annotate) {
+      // strokeWidth 按画布 scale 换算：屏幕上恒 ≥2 逻辑px（2/fit 输出px），
+      // 拖拽预览与提交渲染取同一值。曾固定 2 输出px——拖拽画 2 控件px、
+      // 提交后 2×fit 控件px，粗细浓淡不一致（被感知为「拖动颜色更浅」），
+      // 且大图上提交后细如发丝。
+      final ctrl = _controller;
+      final sw = ctrl == null
+          ? 2.0
+          : math.max(
+              2.0,
+              2.0 /
+                  (canvasSize.width /
+                      sizeAfter(_effectiveNodes(ctrl), ctrl.source.width,
+                              ctrl.source.height)
+                          .w));
       switch (_annotateKind) {
         case AnnotateKinds.text:
           // 拖出的虚线框 = 文字框：锚点取框左上角，字号由框高换算
@@ -374,6 +388,7 @@ class _EditorPageState extends State<EditorPage> {
                 for (final p in _doodlePts)
                   {'x': rx(p.dx), 'y': ry(p.dy)}
               ],
+              'strokeWidth': sw,
             }));
           }
           _doodlePts.clear();
@@ -384,6 +399,7 @@ class _EditorPageState extends State<EditorPage> {
             'y': ry(s.dy),
             'x2': rx(e.dx),
             'y2': ry(e.dy),
+            'strokeWidth': sw,
           }));
       }
     }
@@ -627,6 +643,21 @@ class _EditorPageState extends State<EditorPage> {
         }
       }
 
+      // 颜色调整/滤镜经 widget 层 ColorFiltered（Impeller 的
+      // drawImage+ColorFilter 不生效）。标注矢量画在滤镜内侧、随图一并
+      // 被调色；拖拽预览必须包进同一滤镜，否则有调整时拖拽颜色 ≠ 提交颜色。
+      final merged = mergedAdjustOf(effective);
+      final pv = ctrl.adjustPreview;
+      if (pv != null) {
+        merged
+          ..removeWhere((k, _) => pv.containsKey(k))
+          ..addAll(pv);
+      }
+      final filter = adjustColorFilter(merged);
+      Widget tinted(Widget child) => filter == null
+          ? child
+          : ColorFiltered(colorFilter: filter, child: child);
+
       return Listener(
         // onPointerDown 记录真实按下位置：onPanStart 在手势竞争裁决（越过
         // slop）时才触发，其 localPosition 是裁决时事件位置，快速拖动会
@@ -641,46 +672,34 @@ class _EditorPageState extends State<EditorPage> {
         child: Stack(
           children: [
             Center(
-              // 屏幕直绘：源位图 + 节点矢量叠加。
-              // 颜色调整/滤镜经 widget 层 ColorFiltered（Impeller 的
-              // drawImage+ColorFilter 不生效）；标注矢量在滤镜内侧绘制后
-              // 一并被调色，与导出顺序略有差异（可接受，已注释）。
-              child: Builder(builder: (context) {
-                final merged = mergedAdjustOf(effective);
-                final pv = ctrl.adjustPreview;
-                if (pv != null) {
-                  merged
-                    ..removeWhere((k, _) => pv.containsKey(k))
-                    ..addAll(pv);
-                }
-                final filter = adjustColorFilter(merged);
-                final paintLayer = CustomPaint(
+              // 屏幕直绘：源位图 + 节点矢量叠加（含调色滤镜）
+              child: tinted(
+                CustomPaint(
                   size: Size(drawW, drawH),
                   painter: EditorPreviewPainter(
                       source: ctrl.source,
                       nodes: effective,
                       generation: ctrl.generation),
-                );
-                if (filter == null) return paintLayer;
-                return ColorFiltered(
-                    colorFilter: filter, child: paintLayer);
-              }),
+                ),
+              ),
             ),
             // 透明棋盘格底（4.3.3）：由画布背景承担
             if (_tool == _Tool.annotate && _dragStart != null && _dragNow != null)
               Positioned.fill(
-                child: CustomPaint(
-                  painter: _AnnotateDragPainter(
-                    kind: _annotateKind,
-                    a: _dragStart! + topLeft,
-                    b: _dragNow! + topLeft,
-                    doodle: [for (final p in _doodlePts) p + topLeft],
-                    source: ctrl.source,
-                    geo: nodeGeometryMatrix(effective, ctrl.source.width.toDouble(),
-                        ctrl.source.height.toDouble()),
-                    outSize: Size(out.w.toDouble(), out.h.toDouble()),
-                    topLeft: topLeft,
-                    fit: fit,
+                child: tinted(
+                  CustomPaint(
+                    painter: _AnnotateDragPainter(
+                      kind: _annotateKind,
+                      a: _dragStart! + topLeft,
+                      b: _dragNow! + topLeft,
+                      doodle: [for (final p in _doodlePts) p + topLeft],
+                      source: ctrl.source,
+                      geo: nodeGeometryMatrix(effective, ctrl.source.width.toDouble(),
+                          ctrl.source.height.toDouble()),
+                      outSize: Size(out.w.toDouble(), out.h.toDouble()),
+                      topLeft: topLeft,
+                      fit: fit,
+                    ),
                   ),
                 ),
               ),
@@ -1049,9 +1068,13 @@ class _FreeRotateControlState extends State<_FreeRotateControl> {
   }
 }
 
-/// 标注拖拽实时预览：视觉与已提交渲染一致——矩形/椭圆描边、箭头线+
-/// 箭头头部、涂鸦折线、文字虚线框；马赛克直接实时像素化（与提交/导出
-/// 同一 [paintMosaicRegion] 路径，缺底图参数时退化为半透明块标记）。
+/// 标注拖拽实时预览：与提交渲染完全同路径——矩形/椭圆/箭头/涂鸦在
+/// 输出画布坐标系经 [paintAnnotateVectors] 绘制（与提交后同一函数、同一
+/// 默认参数、同一 strokeWidth 取值），松手前后观感逐像素一致（曾拖拽在
+/// 控件坐标系画固定 2px 描边且不受调色滤镜影响，提交后变细/变色被感知为
+/// 「拖动时颜色更浅」）；文字拖出虚线框（输入前的选区示意）；马赛克直接
+/// 实时像素化（与提交/导出同一 [paintMosaicRegion] 路径，缺底图参数时
+/// 退化为半透明块标记）。
 class _AnnotateDragPainter extends CustomPainter {
   _AnnotateDragPainter({
     required this.kind,
@@ -1084,15 +1107,10 @@ class _AnnotateDragPainter extends CustomPainter {
       ..color = _accent
       ..style = ui.PaintingStyle.stroke
       ..strokeWidth = 2;
+    final out = outSize, tl = topLeft, f = fit;
     switch (kind) {
-      case AnnotateKinds.rect:
-        canvas.drawRect(Rect.fromPoints(a, b), stroke);
-      case AnnotateKinds.ellipse:
-        canvas.drawOval(Rect.fromPoints(a, b), stroke);
-      case AnnotateKinds.arrow:
-        _drawArrow(canvas, a, b, stroke);
       case AnnotateKinds.mosaic:
-        final src = source, g = geo, out = outSize, tl = topLeft, f = fit;
+        final src = source, g = geo;
         if (src != null && g != null && out != null && tl != null && f != null) {
           ui.Offset toOut(Offset p) => (p - tl) / f;
           final rect = ui.Rect.fromPoints(toOut(a), toOut(b))
@@ -1118,31 +1136,36 @@ class _AnnotateDragPainter extends CustomPainter {
               ..color = const ui.Color(0x66FFFFFF));
       case AnnotateKinds.text:
         _drawDashedRect(canvas, Rect.fromPoints(a, b), stroke);
-      case AnnotateKinds.doodle:
-        if (doodle.length > 1) {
-          final pen = ui.Paint()
-            ..color = _accent
-            ..style = ui.PaintingStyle.stroke
-            ..strokeWidth = 2
-            ..strokeCap = ui.StrokeCap.round;
-          for (var i = 1; i < doodle.length; i++) {
-            canvas.drawLine(doodle[i - 1], doodle[i], pen);
+      default:
+        // 矩形/椭圆/箭头/涂鸦：构造与 _onDragEnd 提交时完全相同的参数，
+        // 在输出画布坐标系用同一 paintAnnotateVectors 绘制
+        if (out != null && tl != null && f != null) {
+          final dw = out.width * f, dh = out.height * f;
+          double rx(double px) => ((px - tl.dx) / dw).clamp(0.0, 1.0);
+          double ry(double py) => ((py - tl.dy) / dh).clamp(0.0, 1.0);
+          final params = <String, Object?>{
+            'kind': kind,
+            'strokeWidth': math.max(2.0, 2.0 / f), // 与提交时同一换算
+          };
+          if (kind == AnnotateKinds.doodle) {
+            params['points'] = [
+              for (final p in doodle)
+                {'x': rx(p.dx), 'y': ry(p.dy)}
+            ];
+          } else {
+            params
+              ..['x'] = rx(a.dx)
+              ..['y'] = ry(a.dy)
+              ..['x2'] = rx(b.dx)
+              ..['y2'] = ry(b.dy);
           }
+          canvas.save();
+          canvas.translate(tl.dx, tl.dy);
+          canvas.scale(f);
+          paintAnnotateVectors(canvas, out, params);
+          canvas.restore();
         }
     }
-  }
-
-  void _drawArrow(ui.Canvas canvas, ui.Offset from, ui.Offset to, ui.Paint paint) {
-    canvas.drawLine(from, to, paint);
-    final dir = to - from;
-    final len = dir.distance;
-    if (len <= 0) return;
-    ui.Offset rot(ui.Offset v, double ang) => ui.Offset(
-        v.dx * math.cos(ang) - v.dy * math.sin(ang),
-        v.dx * math.sin(ang) + v.dy * math.cos(ang));
-    final u = dir / len;
-    canvas.drawLine(to, to - rot(u, math.pi / 6) * 14, paint);
-    canvas.drawLine(to, to - rot(u, -math.pi / 6) * 14, paint);
   }
 
   void _drawDashedRect(ui.Canvas canvas, ui.Rect r, ui.Paint paint) {

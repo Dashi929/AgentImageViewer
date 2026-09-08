@@ -248,8 +248,9 @@ Future<ui.Image> _applyAdjust(ui.Image img, Map<String, double> p) async {
   return base;
 }
 
-/// 马赛克块边长（输出像素）：随画幅自适应，钳制在 6~96。
-int mosaicBlockSize(num w, num h) => (math.min(w, h) / 40).round().clamp(6, 96);
+/// 马赛克块边长（输出像素）：随画幅自适应，钳制在 8~120。
+/// 预览与导出共用同一取值，保证两侧观感一致。
+int mosaicBlockSize(num w, num h) => (math.min(w, h) / 30).round().clamp(8, 120);
 
 /// 在给定画布上按输出尺寸绘制单个标注节点（矢量部分，屏幕/离屏共用）。
 /// 马赛克不在此绘制：预览由 EditorPreviewPainter 像素化、导出由
@@ -359,7 +360,7 @@ Future<ui.Image> _applyAnnotate(ui.Image img, Map<String, Object?> params) async
 }
 
 /// 马赛克导出：把标注矩形区域降采样到块网格，再无插值放大回铺——
-/// 块内容取样自底图像素，与屏幕预览的像素化观感一致。
+/// 块内容取样自底图像素，与屏幕预览（paintMosaicRegion）同机制同观感。
 /// （旧实现只画半透明黑块，从未真正像素化。）
 void _applyMosaic(ui.Canvas c, ui.Image img, Map<String, Object?> params) {
   final w = img.width.toDouble(), h = img.height.toDouble();

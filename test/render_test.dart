@@ -209,8 +209,8 @@ void main() {
       expect((out.width, out.height), (200, 100));
       final px = await _pixels(out);
       int at(int x, int y) => _at(px, out.width, x, y);
-      // bs = clamp(min(200,100)/40 = 6)：矩形输出 (80..160, 40..80)，
-      // 块自矩形起点铺（13×7 网格），取样点均落在块内部
+      // bs = clamp(min(200,100)/30 = 3 → 8)：矩形输出 (80..160, 40..80)，
+      // 块自矩形起点铺（10×5 网格），取样点均落在块内部
       expect(at(100, 50), at(101, 50), reason: '块内横向均匀');
       expect(at(100, 49), at(100, 50), reason: '块内纵向均匀');
       expect(at(82, 41), at(83, 41), reason: '左上角块内均匀');
