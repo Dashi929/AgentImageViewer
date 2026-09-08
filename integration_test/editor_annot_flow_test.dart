@@ -1,5 +1,6 @@
 // 真机集成测试：直入编辑器复现「标注→图片消失→卡死」（Windows 桌面引擎）。
 // 运行: flutter test integration_test/editor_annot_flow_test.dart -d windows
+import 'dart:io';
 import 'package:agent_image_viewer/app_state.dart';
 import 'package:agent_image_viewer/core/editor/editor_controller.dart';
 import 'package:agent_image_viewer/main.dart' as app;
@@ -25,7 +26,8 @@ void main() {
     final ctx = tester.element(find.byType(GalleryPage));
     final state = AppStateScope.of(ctx, listen: false);
     expect(state.library.entries, isNotEmpty, reason: '图库应有图片');
-    final entry = state.library.entries.first;
+    // 图库可能含已移出盘的失效条目（文件不存在 decode 会抛异常）：只取真实存在的
+    final entry = state.library.entries.firstWhere((e) => File(e.path).existsSync());
     NavigatorStateEx.editor.value = entry;
 
     // 等控制器就绪（真实解码）

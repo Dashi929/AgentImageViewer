@@ -2,6 +2,7 @@
 // 回归背景：自绘标题栏曾悬浮覆盖窗口顶部 36px，编辑器顶栏按钮（撤销/重做/导出）
 // 鼠标永远点不到（Stack 命中测试被标题栏拖拽区截停）；改为标题栏独占一行后必须保持可点。
 // 运行: flutter test integration_test/editor_crop_undo_test.dart -d windows
+import 'dart:io';
 import 'package:agent_image_viewer/app_state.dart';
 import 'package:agent_image_viewer/core/editor/editor_controller.dart';
 import 'package:agent_image_viewer/core/pipeline/node.dart';
@@ -25,7 +26,8 @@ void main() {
     final ctx = tester.element(find.byType(GalleryPage));
     final state = AppStateScope.of(ctx, listen: false);
     expect(state.library.entries, isNotEmpty, reason: '图库应有图片');
-    final entry = state.library.entries.first;
+    // 图库可能含已移出盘的失效条目（文件不存在 decode 会抛异常）：只取真实存在的
+    final entry = state.library.entries.firstWhere((e) => File(e.path).existsSync());
     NavigatorStateEx.editor.value = entry;
 
     EditorController? ctrl;

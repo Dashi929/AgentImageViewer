@@ -73,16 +73,26 @@ class _EditorPageState extends State<EditorPage> {
   Future<void> _initController() async {
     final app = AppStateScope.of(context, listen: false);
     _appRef = app;
-    // 源图（导出用全尺寸）+ 预览图（≤2048，滑杆实时求值不卡）
-    final decoded = await app.images
-        .decode(widget.entry.path, widget.entry.mtimeMs, autoPin: true);
+    // 源图（导出用全尺寸）+ 预览图（≤2048，滑杆实时求值不卡）。
+    // 图库可能含已被移出磁盘的条目：decode 抛异常时兜底退出，不留死转圈。
+    ui.Image decodedImage;
+    try {
+      final decoded = await app.images
+          .decode(widget.entry.path, widget.entry.mtimeMs, autoPin: true);
+      decodedImage = decoded.image;
+      _pinnedSourceKey = decoded.cacheKey;
+    } catch (_) {
+      if (!mounted) return;
+      _showOsd('无法读取图片文件（可能已被移动或删除）');
+      NavigatorStateEx.editor.value = null;
+      return;
+    }
     if (!mounted) return;
-    _pinnedSourceKey = decoded.cacheKey;
     // 关键：重建为 software 位图——CustomPaint.drawImage 对解码器产出的
     // GPU 位图在 Impeller(Windows/Android) 上绘制失败(灰/黑画布)，
     // 而 RawImage 路径正常；CPU 位图两条路径都正常。
     final softwareSource =
-        await ImageManager.toSoftwareImage(decoded.image);
+        await ImageManager.toSoftwareImage(decodedImage);
     if (!mounted) return;
 
     final id = widget.entry.path.hashCode.toUnsigned(32).toString();
@@ -665,6 +675,12 @@ class _EditorPageState extends State<EditorPage> {
                     a: _dragStart! + topLeft,
                     b: _dragNow! + topLeft,
                     doodle: [for (final p in _doodlePts) p + topLeft],
+                    source: ctrl.source,
+                    geo: nodeGeometryMatrix(effective, ctrl.source.width.toDouble(),
+                        ctrl.source.height.toDouble()),
+                    outSize: Size(out.w.toDouble(), out.h.toDouble()),
+                    topLeft: topLeft,
+                    fit: fit,
                   ),
                 ),
               ),
@@ -1033,19 +1049,32 @@ class _FreeRotateControlState extends State<_FreeRotateControl> {
   }
 }
 
-/// 标注拖拽实时预览：视觉与已提交渲染（paintAnnotateVectors）一致——
-/// 矩形/椭圆描边、箭头线+箭头头部、涂鸦折线、马赛克半透明块、文字虚线框。
+/// 标注拖拽实时预览：视觉与已提交渲染一致——矩形/椭圆描边、箭头线+
+/// 箭头头部、涂鸦折线、文字虚线框；马赛克直接实时像素化（与提交/导出
+/// 同一 [paintMosaicRegion] 路径，缺底图参数时退化为半透明块标记）。
 class _AnnotateDragPainter extends CustomPainter {
   _AnnotateDragPainter({
     required this.kind,
     required this.a,
     required this.b,
     required this.doodle,
+    this.source,
+    this.geo,
+    this.outSize,
+    this.topLeft,
+    this.fit,
   });
 
   final String kind;
   final Offset a, b;
   final List<Offset> doodle;
+
+  // 马赛克像素化预览所需（页面画布几何）
+  final ui.Image? source;
+  final Matrix4? geo;
+  final Size? outSize;
+  final Offset? topLeft;
+  final double? fit;
 
   static const _accent = ui.Color(0xFFE5615C);
 
@@ -1063,6 +1092,21 @@ class _AnnotateDragPainter extends CustomPainter {
       case AnnotateKinds.arrow:
         _drawArrow(canvas, a, b, stroke);
       case AnnotateKinds.mosaic:
+        final src = source, g = geo, out = outSize, tl = topLeft, f = fit;
+        if (src != null && g != null && out != null && tl != null && f != null) {
+          ui.Offset toOut(Offset p) => (p - tl) / f;
+          final rect = ui.Rect.fromPoints(toOut(a), toOut(b))
+              .intersect(ui.Offset.zero & out);
+          if (rect.width >= 1 && rect.height >= 1) {
+            canvas.save();
+            canvas.translate(tl.dx, tl.dy);
+            canvas.scale(f);
+            paintMosaicRegion(canvas,
+                source: src, geo: g, rect: rect, out: out);
+            canvas.restore();
+            return;
+          }
+        }
         canvas.drawRect(Rect.fromPoints(a, b),
             ui.Paint()..color = const ui.Color(0x66000000));
         _drawDashedRect(
@@ -1123,7 +1167,14 @@ class _AnnotateDragPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _AnnotateDragPainter old) =>
-      old.kind != kind || old.a != a || old.b != b || old.doodle.length != doodle.length;
+      old.kind != kind ||
+      old.a != a ||
+      old.b != b ||
+      old.doodle.length != doodle.length ||
+      old.source != source ||
+      old.geo != geo ||
+      old.outSize != outSize ||
+      old.fit != fit;
 }
 
 /// 裁剪选区预览：选区外压暗 + 强调色边框 + 三分参考线（确认前不入栈）。

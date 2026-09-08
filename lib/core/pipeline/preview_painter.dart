@@ -2,9 +2,10 @@
 ///
 /// 不生成中间位图（绕开离屏合成在各后端的显示问题），
 /// 滑杆/标注实时无位图分配；导出仍走离屏管线精确合成。
-/// 几何变换与导出管线（render.dart）逐节点同构：画布变换按节点逆序
-/// 施加各节点的「正向内容映射」，源图以原生尺寸绘制，避免绕旧中心
-/// 旋转/拉伸导致的错位。马赛克预览以半透明块近似（导出为精确像素化）。
+/// 几何变换与导出管线（render.dart）逐节点同构：以「源像素 → 输出画布」
+/// 内容映射矩阵（[nodeGeometryMatrix]）变换后 1:1 绘制源图。标注矢量绘制在
+/// 输出画布坐标系（fit 缩放 + off 平移已应用），马赛克以图像滤镜真实
+/// 像素化，与导出观感一致。
 library;
 
 import 'dart:math' as math;
@@ -44,90 +45,35 @@ class EditorPreviewPainter extends CustomPainter {
     final drawW = out.w * fit, drawH = out.h * fit;
     final off = Offset((size.width - drawW) / 2, (size.height - drawH) / 2);
 
-    // 前向记录每个几何节点的作用前/后帧尺寸（逆序施加变换时需要）。
-    final steps = <_GeoStep>[];
-    var cw = source.width.toDouble(), ch = source.height.toDouble();
-    for (final n in nodes) {
-      final (double, double)? next = switch (n.op) {
-        Ops.rotate =>
-          _rotatedSize(cw, ch, (n.params['deg'] as num).toInt()),
-        Ops.freeRotate =>
-          _freeRotatedSize(cw, ch, (n.params['deg'] as num).toDouble()),
-        Ops.flip => (cw, ch),
-        Ops.crop => (
-            cw * (n.params['w'] as num).toDouble(),
-            ch * (n.params['h'] as num).toDouble(),
-          ),
-        Ops.resize => _resizedSize(n, cw, ch),
-        _ => null, // 非几何节点不产生变换
-      };
-      if (next == null) continue;
-      steps.add(_GeoStep(n, cw, ch, next.$1, next.$2));
-      (cw, ch) = next;
-    }
+    // 前向记录每个几何节点的作用前/后帧尺寸（构建内容映射矩阵时需要）。
+    final geo =
+        nodeGeometryMatrix(nodes, source.width.toDouble(), source.height.toDouble());
 
     canvas.save();
     canvas.translate(off.dx, off.dy);
     canvas.scale(fit);
 
-    // 画布变换为 post-concat（最后调用者先作用于坐标）：按节点逆序
-    // 调用各节点的正向内容映射，源点即依栈序流经全部变换。
-    for (var i = steps.length - 1; i >= 0; i--) {
-      final s = steps[i];
-      final n = s.node;
-      switch (n.op) {
-        case Ops.rotate:
-          final d =
-              ((n.params['deg'] as num).toInt() % 360 + 360) % 360;
-          switch (d) {
-            case 90:
-              canvas.translate(s.oh, 0);
-              canvas.rotate(math.pi / 2);
-            case 180:
-              canvas.translate(s.ow, s.oh);
-              canvas.rotate(math.pi);
-            case 270:
-              canvas.translate(0, s.ow);
-              canvas.rotate(3 * math.pi / 2);
-          }
-        case Ops.freeRotate:
-          final rad = (n.params['deg'] as num).toDouble() * math.pi / 180;
-          canvas.translate(s.nw / 2, s.nh / 2);
-          canvas.rotate(rad);
-          canvas.translate(-s.ow / 2, -s.oh / 2);
-        case Ops.flip:
-          if ((n.params['axis'] as String) == 'h') {
-            canvas.translate(s.ow, 0);
-            canvas.scale(-1, 1);
-          } else {
-            canvas.translate(0, s.oh);
-            canvas.scale(1, -1);
-          }
-        case Ops.crop:
-          final rw = (n.params['w'] as num).toDouble();
-          final rh = (n.params['h'] as num).toDouble();
-          canvas.scale(1 / rw, 1 / rh);
-          canvas.translate(
-              -(n.params['x'] as num).toDouble() * s.ow,
-              -(n.params['y'] as num).toDouble() * s.oh);
-        case Ops.resize:
-          canvas.scale(s.nw / s.ow, s.nh / s.oh);
-      }
-    }
-
-    // 源图以原生尺寸绘制：几何以内容映射表达，无目标矩形拉伸
+    // 源图经「源像素 → 输出画布」映射矩阵 1:1 绘制（与导出逐节点同构）
+    canvas.save();
+    canvas.transform(geo.storage);
     final paint = ui.Paint()..filterQuality = ui.FilterQuality.medium;
     canvas.drawImage(source, ui.Offset.zero, paint);
     canvas.restore(); // 撤几何变换，回到输出画布坐标系
 
-    // 标注矢量叠加（相对比例 × 输出画布）。新标注总是入栈尾、
-    // 以最终帧为参照；「先标注后几何」的旧栈序与导出存在既有差异。
+    // 标注矢量叠加（相对比例 × 输出画布）。绘制上下文必须保留 fit/off
+    // （曾整层 restore 回控件坐标系，导致标注按输出像素尺度直绘、
+    // 落点整体向右下偏移）。新标注总是入栈尾、以最终帧为参照；
+    // 「先标注后几何」的旧栈序与导出存在既有差异。
+    final outSize = ui.Size(out.w.toDouble(), out.h.toDouble());
     for (final n in nodes) {
-      if (n.op == Ops.annotate) {
-        paintAnnotateVectors(
-            canvas, ui.Size(out.w.toDouble(), out.h.toDouble()), n.params);
+      if (n.op != Ops.annotate) continue;
+      if (n.params['kind'] == AnnotateKinds.mosaic) {
+        _paintMosaic(canvas, source, geo, outSize, n.params);
+      } else {
+        paintAnnotateVectors(canvas, outSize, n.params);
       }
     }
+    canvas.restore();
   }
 
   @override
@@ -140,6 +86,126 @@ class EditorPreviewPainter extends CustomPainter {
   final d = ((deg % 360) + 360) % 360;
   return (d == 90 || d == 270) ? (h, w) : (w, h);
 }
+
+/// 节点序列的「源像素 → 输出画布」内容映射矩阵。预览 painter 与
+/// 标注拖拽实时预览（editor_page）共用。
+Matrix4 nodeGeometryMatrix(List<FilterNode> nodes, double srcW, double srcH) {
+  // 前向记录每个几何节点的作用前/后帧尺寸
+  final steps = <_GeoStep>[];
+  var cw = srcW, ch = srcH;
+  for (final n in nodes) {
+    final (double, double)? next = switch (n.op) {
+      Ops.rotate => _rotatedSize(cw, ch, (n.params['deg'] as num).toInt()),
+      Ops.freeRotate => _freeRotatedSize(cw, ch, (n.params['deg'] as num).toDouble()),
+      Ops.flip => (cw, ch),
+      Ops.crop => (
+          cw * (n.params['w'] as num).toDouble(),
+          ch * (n.params['h'] as num).toDouble(),
+        ),
+      Ops.resize => _resizedSize(n, cw, ch),
+      _ => null, // 非几何节点不产生变换
+    };
+    if (next == null) continue;
+    steps.add(_GeoStep(n, cw, ch, next.$1, next.$2));
+    (cw, ch) = next;
+  }
+
+  final m = Matrix4.identity();
+  for (var i = steps.length - 1; i >= 0; i--) {
+    final s = steps[i];
+    switch (s.node.op) {
+      case Ops.rotate:
+        final d = ((s.node.params['deg'] as num).toInt() % 360 + 360) % 360;
+        switch (d) {
+          case 90:
+            m.translateByDouble(s.oh, 0, 0.0, 1.0);
+            m.rotateZ(math.pi / 2);
+          case 180:
+            m.translateByDouble(s.ow, s.oh, 0.0, 1.0);
+            m.rotateZ(math.pi);
+          case 270:
+            m.translateByDouble(0.0, s.ow, 0.0, 1.0);
+            m.rotateZ(3 * math.pi / 2);
+        }
+      case Ops.freeRotate:
+        final rad = (s.node.params['deg'] as num).toDouble() * math.pi / 180;
+        m.translateByDouble(s.nw / 2, s.nh / 2, 0.0, 1.0);
+        m.rotateZ(rad);
+        m.translateByDouble(-s.ow / 2, -s.oh / 2, 0.0, 1.0);
+      case Ops.flip:
+        if ((s.node.params['axis'] as String) == 'h') {
+          m.translateByDouble(s.ow, 0, 0.0, 1.0);
+          m.scaleByDouble(-1.0, 1.0, 1.0, 1.0);
+        } else {
+          m.translateByDouble(0.0, s.oh, 0.0, 1.0);
+          m.scaleByDouble(1.0, -1.0, 1.0, 1.0);
+        }
+      case Ops.crop:
+        m.translateByDouble(
+            -(s.node.params['x'] as num).toDouble() * s.ow,
+            -(s.node.params['y'] as num).toDouble() * s.oh,
+            0.0,
+            1.0);
+      case Ops.resize:
+        m.scaleByDouble(s.nw / s.ow, s.nh / s.oh, 1.0, 1.0);
+    }
+  }
+  return m;
+}
+
+/// 矩阵列向量的 2D 长度（axis: 0=x 基, 1=y 基）＝该轴的总缩放。
+/// 旋转不改列长，含自由旋转的链同样适用。
+double _columnScale(Matrix4 m, int axis) {
+  final s = m.storage;
+  final x = s[axis * 4], y = s[axis * 4 + 1];
+  return math.sqrt(x * x + y * y);
+}
+
+/// 马赛克预览：与导出一致的块状像素化（块边长以输出画布像素计）。
+void _paintMosaic(ui.Canvas canvas, ui.Image source, Matrix4 geo,
+    ui.Size out, Map<String, Object?> params) {
+  final x = ((params['x'] as num?) ?? 0).toDouble() * out.width;
+  final y = ((params['y'] as num?) ?? 0).toDouble() * out.height;
+  final x2 = ((params['x2'] as num?) ?? x).toDouble() * out.width;
+  final y2 = ((params['y2'] as num?) ?? y).toDouble() * out.height;
+  final rect = ui.Rect.fromPoints(ui.Offset(x, y), ui.Offset(x2, y2))
+      .intersect(ui.Offset.zero & out);
+  if (rect.width < 1 || rect.height < 1) return;
+  paintMosaicRegion(canvas, source: source, geo: geo, rect: rect, out: out);
+}
+
+/// 在「输出画布坐标系」的画布上绘制马赛克像素化区域（提交预览与
+/// 拖拽实时预览共用）。实现：clip 到矩形后把源图经几何映射重画一遍，
+/// 绘制时叠加「缩小(双线性)→放大(无插值)」复合图像滤镜——纯画布操作，
+/// 无离屏位图，块内容取样自真实像素，与导出观感一致。
+void paintMosaicRegion(ui.Canvas canvas,
+    {required ui.Image source,
+    required Matrix4 geo,
+    required ui.Rect rect,
+    required ui.Size out}) {
+  final bs = mosaicBlockSize(out.width, out.height).toDouble();
+  final bsx = math.max(1.0, bs / _columnScale(geo, 0)); // 源像素块边长
+  final bsy = math.max(1.0, bs / _columnScale(geo, 1));
+  final pixelate = ui.Paint()
+    ..filterQuality = ui.FilterQuality.medium
+    ..imageFilter = ui.ImageFilter.compose(
+      outer: _scaleImageFilter(bsx, bsy, ui.FilterQuality.none),
+      inner: _scaleImageFilter(1 / bsx, 1 / bsy, ui.FilterQuality.medium),
+    );
+
+  canvas.save();
+  canvas.clipRect(rect);
+  canvas.save();
+  canvas.transform(geo.storage);
+  canvas.drawImage(source, ui.Offset.zero, pixelate);
+  canvas.restore();
+  canvas.restore();
+}
+
+/// 纯缩放矩阵图像滤镜（本 SDK 无 ImageFilter.scale，用 matrix 等价）。
+ui.ImageFilter _scaleImageFilter(double sx, double sy, ui.FilterQuality q) =>
+    ui.ImageFilter.matrix((Matrix4.identity()..scaleByDouble(sx, sy, 1.0, 1.0)).storage,
+        filterQuality: q);
 
 /// 任意角度旋转的包围盒帧尺寸。
 (double, double) _freeRotatedSize(double w, double h, double deg) {

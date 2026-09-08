@@ -108,4 +108,90 @@ void main() {
     expect(_at(px, 32, 24, 24), _red);
     expect(_at(px, 32, 4, 28), _red);
   });
+
+  test('预览 crop 保留区域与导出一致：右半（蓝）充满输出，不放大错位', () async {
+    // 四竖条 R,G,B,Y 各 16px；裁掉左半 → 输出应恰好是 B,Y 两条各占一半
+    final src = await _bands(64, 32);
+    final px = await _paintPreview(src, [
+      FilterNode(op: Ops.crop, params: {'x': 0.5, 'y': 0, 'w': 0.5, 'h': 1}),
+    ], w: 32, h: 32);
+    expect(_at(px, 32, 4, 16), _blue, reason: '输出左半应为大面积蓝（源 32~48px 列）');
+    expect(_at(px, 32, 28, 16), _yellow, reason: '输出右半应为黄（源 48~64px 列）');
+  });
+
+  test('标注预览绘制在输出画布坐标系：fit≠1 时不向右下偏移', () async {
+    // 画布恰为输出一半（fit=0.5, off=0）：rect 描边 16 输出px → 8 控件px，
+    // 左边带应落在控件 x∈[16,24]；曾整层 restore 回控件坐标系，
+    // 标注按输出像素尺度直绘（左边带落到 x∈[32,48]）
+    final src = await _solid(200, 100, _blue);
+    final px = await _paintPreview(src, [
+      FilterNode(op: Ops.annotate, params: {
+        'kind': 'rect', 'x': 0.2, 'y': 0.2, 'x2': 0.8, 'y2': 0.8, 'size': 200,
+        'color': 0xFFE60000,
+      }),
+    ], w: 100, h: 50);
+    expect(_at(px, 100, 20, 25), _red, reason: 'rect 左描边应在控件 x=20 处');
+    expect(_at(px, 100, 50, 25), _blue, reason: '矩形内部镂空应为底图蓝色');
+    expect(_at(px, 100, 10, 25), _blue, reason: '矩形外侧应为底图蓝色');
+  });
+
+  test('马赛克预览为真实像素化：块内均匀、区域位置正确', () async {
+    // 2px 白/黑竖条源 + fit=0.5：马赛克块（6 输出px = 3 控件px）内相邻
+    // 控件像素必须相等；区域（控件 [30..70]×[5..45]）外保持原图棋盘。
+    // 旧半透明黑块近似与偏移直绘在「块内相等」断言上必然失败。
+    final src = await _checker(200, 100);
+    final px = await _paintPreview(src, [
+      FilterNode(op: Ops.annotate, params: {
+        'kind': 'mosaic', 'x': 0.3, 'y': 0.1, 'x2': 0.7, 'y2': 0.9,
+      }),
+    ], w: 100, h: 50);
+    // 区域内：同一马赛克块内相邻像素相等
+    expect(_at(px, 100, 34, 25), _at(px, 100, 35, 25));
+    expect(_at(px, 100, 40, 25), _at(px, 100, 41, 25));
+    expect(_at(px, 100, 49, 25), _at(px, 100, 50, 25));
+    expect(_at(px, 100, 31, 25), _at(px, 100, 32, 25));
+    expect(_at(px, 100, 34, 7), _at(px, 100, 35, 7), reason: '上边缘内侧同为块内');
+    // 区域外：原图 2px 棋盘经 0.5 缩放后相邻控件像素必不同
+    expect(_at(px, 100, 26, 25), isNot(_at(px, 100, 27, 25)), reason: '左缘外应保持棋盘');
+    expect(_at(px, 100, 72, 25), isNot(_at(px, 100, 73, 25)), reason: '右缘外应保持棋盘');
+    expect(_at(px, 100, 34, 2), isNot(_at(px, 100, 35, 2)), reason: '上缘外应保持棋盘');
+  });
+}
+
+const _yellow = 0xFFE6E600;
+
+Future<ui.Image> _solid(int w, int h, int color) async {
+  final rec = ui.PictureRecorder();
+  final c = ui.Canvas(rec, ui.Offset.zero & ui.Size(w.toDouble(), h.toDouble()));
+  c.drawRect(ui.Offset.zero & ui.Size(w.toDouble(), h.toDouble()),
+      ui.Paint()..color = ui.Color(color));
+  return rec.endRecording().toImage(w, h);
+}
+
+/// 2px 白/黑交替竖条（源像素级棋盘）。
+Future<ui.Image> _checker(int w, int h) async {
+  final rec = ui.PictureRecorder();
+  final c = ui.Canvas(rec, ui.Offset.zero & ui.Size(w.toDouble(), h.toDouble()));
+  c.drawRect(ui.Offset.zero & ui.Size(w.toDouble(), h.toDouble()),
+      ui.Paint()..color = const ui.Color(0xFF000000));
+  for (var x = 0; x < w; x += 4) {
+    c.drawRect(
+        ui.Offset(x.toDouble(), 0) & ui.Size(2, h.toDouble()),
+        ui.Paint()..color = const ui.Color(0xFFFFFFFF));
+  }
+  return rec.endRecording().toImage(w, h);
+}
+
+/// 四竖条测试图：每条 w/4 宽，依次 红绿蓝黄。
+Future<ui.Image> _bands(int w, int h) async {
+  final rec = ui.PictureRecorder();
+  final c = ui.Canvas(rec, ui.Offset.zero & ui.Size(w.toDouble(), h.toDouble()));
+  final colors = [const ui.Color(_red), const ui.Color(0xFF00E600), const ui.Color(_blue), const ui.Color(_yellow)];
+  final bw = w / 4;
+  for (var i = 0; i < 4; i++) {
+    c.drawRect(
+        ui.Offset(bw * i, 0) & ui.Size(bw, h.toDouble()),
+        ui.Paint()..color = colors[i]);
+  }
+  return rec.endRecording().toImage(w, h);
 }

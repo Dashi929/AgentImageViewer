@@ -2,6 +2,7 @@
 // 回归背景：滑杆原本要点「应用」按钮才生效；自由旋转多次应用会重复烘焙
 // 包围盒导致内容越转越小。
 // 运行: flutter test integration_test/editor_slider_live_test.dart -d windows
+import 'dart:io';
 import 'package:agent_image_viewer/app_state.dart';
 import 'package:agent_image_viewer/core/editor/editor_controller.dart';
 import 'package:agent_image_viewer/core/pipeline/node.dart';
@@ -23,7 +24,8 @@ void main() {
     final ctx = tester.element(find.byType(GalleryPage));
     final state = AppStateScope.of(ctx, listen: false);
     expect(state.library.entries, isNotEmpty);
-    final entry = state.library.entries.first;
+    // 图库可能含已移出盘的失效条目（文件不存在 decode 会抛异常）：只取真实存在的
+    final entry = state.library.entries.firstWhere((e) => File(e.path).existsSync());
     NavigatorStateEx.editor.value = entry;
 
     EditorController? ctrl;

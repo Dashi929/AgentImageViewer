@@ -1,6 +1,7 @@
 // 真机集成测试：裁剪两阶段流程（PS 式预览 → 用户确认才生效）。
 // 回归背景：裁剪曾拖完直接入栈；比例预设按钮挂在未接线的 GlobalKey 上完全无效。
 // 运行: flutter test integration_test/editor_crop_session_test.dart -d windows
+import 'dart:io';
 import 'package:agent_image_viewer/app_state.dart';
 import 'package:agent_image_viewer/core/editor/editor_controller.dart';
 import 'package:agent_image_viewer/core/pipeline/node.dart';
@@ -23,7 +24,8 @@ void main() {
     final ctx = tester.element(find.byType(GalleryPage));
     final state = AppStateScope.of(ctx, listen: false);
     expect(state.library.entries, isNotEmpty);
-    final entry = state.library.entries.first;
+    // 图库可能含已移出盘的失效条目（文件不存在 decode 会抛异常）：只取真实存在的
+    final entry = state.library.entries.firstWhere((e) => File(e.path).existsSync());
     NavigatorStateEx.editor.value = entry;
 
     EditorController? ctrl;

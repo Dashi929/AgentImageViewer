@@ -197,7 +197,42 @@ void main() {
       expect(_at(hpx, hOut.width, 4, 15), _blue, reason: '水平翻转后左蓝');
       expect(_at(hpx, hOut.width, 36, 15), _red, reason: '水平翻转后右红');
     });
+    test('annotate mosaic 导出为真实像素化：块内均匀、区域位置正确', () async {
+      // 旧实现只画半透明黑块——在棋盘源上半透明叠加仍呈交替条纹，
+      // 「块内均匀」断言必然失败
+      final src = await _checker(200, 100);
+      final out = await renderPipeline(src, [
+        FilterNode(op: Ops.annotate, params: {
+          'kind': 'mosaic', 'x': 0.4, 'y': 0.4, 'x2': 0.8, 'y2': 0.8,
+        }),
+      ]);
+      expect((out.width, out.height), (200, 100));
+      final px = await _pixels(out);
+      int at(int x, int y) => _at(px, out.width, x, y);
+      // bs = clamp(min(200,100)/40 = 6)：矩形输出 (80..160, 40..80)，
+      // 块自矩形起点铺（13×7 网格），取样点均落在块内部
+      expect(at(100, 50), at(101, 50), reason: '块内横向均匀');
+      expect(at(100, 49), at(100, 50), reason: '块内纵向均匀');
+      expect(at(82, 41), at(83, 41), reason: '左上角块内均匀');
+      expect(at(69, 50), isNot(at(70, 50)), reason: '矩形左外侧保持棋盘');
+      expect(at(169, 50), isNot(at(170, 50)), reason: '矩形右外侧保持棋盘');
+      expect(at(99, 30), isNot(at(100, 30)), reason: '矩形上外侧保持棋盘');
+    });
   });
+}
+
+/// 2px 白/黑交替竖条（源像素级棋盘）。
+Future<ui.Image> _checker(int w, int h) async {
+  final rec = ui.PictureRecorder();
+  final c = ui.Canvas(rec, ui.Offset.zero & ui.Size(w.toDouble(), h.toDouble()));
+  c.drawRect(ui.Offset.zero & ui.Size(w.toDouble(), h.toDouble()),
+      ui.Paint()..color = const ui.Color(0xFF000000));
+  for (var x = 0; x < w; x += 4) {
+    c.drawRect(
+        ui.Offset(x.toDouble(), 0) & ui.Size(2, h.toDouble()),
+        ui.Paint()..color = const ui.Color(0xFFFFFFFF));
+  }
+  return rec.endRecording().toImage(w, h);
 }
 
 const _red = 0xFFE60000;

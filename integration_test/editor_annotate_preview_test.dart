@@ -2,6 +2,7 @@
 // 且各类型提交参数正确。
 // 回归背景：所有标注拖动时都显示同一个矩形框，无法区分类型。
 // 运行: flutter test integration_test/editor_annotate_preview_test.dart -d windows
+import 'dart:io';
 import 'package:agent_image_viewer/app_state.dart';
 import 'package:agent_image_viewer/core/editor/editor_controller.dart';
 import 'package:agent_image_viewer/core/pipeline/node.dart';
@@ -28,7 +29,8 @@ void main() {
     final ctx = tester.element(find.byType(GalleryPage));
     final state = AppStateScope.of(ctx, listen: false);
     expect(state.library.entries, isNotEmpty);
-    final entry = state.library.entries.first;
+    // 图库可能含已移出盘的失效条目（文件不存在 decode 会抛异常）：只取真实存在的
+    final entry = state.library.entries.firstWhere((e) => File(e.path).existsSync());
     NavigatorStateEx.editor.value = entry;
 
     EditorController? ctrl;

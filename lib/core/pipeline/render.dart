@@ -248,8 +248,12 @@ Future<ui.Image> _applyAdjust(ui.Image img, Map<String, double> p) async {
   return base;
 }
 
+/// 马赛克块边长（输出像素）：随画幅自适应，钳制在 6~96。
+int mosaicBlockSize(num w, num h) => (math.min(w, h) / 40).round().clamp(6, 96);
+
 /// 在给定画布上按输出尺寸绘制单个标注节点（矢量部分，屏幕/离屏共用）。
-/// 马赛克在屏幕预览下以半透明块近似（导出走离屏精确像素化）。
+/// 马赛克不在此绘制：预览由 EditorPreviewPainter 像素化、导出由
+/// _applyMosaic 像素化（两者都需要访问底图像素，矢量层做不到）。
 void paintAnnotateVectors(ui.Canvas c, ui.Size outSize, Map<String, Object?> params) {
   final kind = params['kind'] as String;
   final size = ((params['size'] as num?)?.toDouble() ?? 24);
@@ -325,6 +329,7 @@ void paintAnnotateVectors(ui.Canvas c, ui.Size outSize, Map<String, Object?> par
         c.drawOval(ui.Rect.fromPoints(ui.Offset(x, y), end), paint);
       }
     case AnnotateKinds.mosaic:
+      // 不可达（预览/导出都走专用像素化路径），兜底画半透明块
       if (end != null) {
         final rect = ui.Rect.fromPoints(ui.Offset(x, y), end);
         c.drawRect(rect, ui.Paint()..color = const ui.Color(0x66000000));
@@ -345,6 +350,35 @@ Future<ui.Image> _applyAnnotate(ui.Image img, Map<String, Object?> params) async
   return _newCanvas(img.width, img.height, (c) {
     // 先合成底图再叠加标注矢量（缺底图会导出「透明画布+标注块」）
     c.drawImage(img, ui.Offset.zero, ui.Paint());
-    paintAnnotateVectors(c, ui.Size(img.width.toDouble(), img.height.toDouble()), params);
+    if ((params['kind'] as String?) == AnnotateKinds.mosaic) {
+      _applyMosaic(c, img, params);
+    } else {
+      paintAnnotateVectors(c, ui.Size(img.width.toDouble(), img.height.toDouble()), params);
+    }
   });
+}
+
+/// 马赛克导出：把标注矩形区域降采样到块网格，再无插值放大回铺——
+/// 块内容取样自底图像素，与屏幕预览的像素化观感一致。
+/// （旧实现只画半透明黑块，从未真正像素化。）
+void _applyMosaic(ui.Canvas c, ui.Image img, Map<String, Object?> params) {
+  final w = img.width.toDouble(), h = img.height.toDouble();
+  final x = ((params['x'] as num?) ?? 0).toDouble() * w;
+  final y = ((params['y'] as num?) ?? 0).toDouble() * h;
+  final x2 = ((params['x2'] as num?) ?? x).toDouble() * w;
+  final y2 = ((params['y2'] as num?) ?? y).toDouble() * h;
+  final rect = ui.Rect.fromPoints(ui.Offset(x, y), ui.Offset(x2, y2))
+      .intersect(ui.Offset.zero & ui.Size(w, h));
+  if (rect.width < 1 || rect.height < 1) return;
+
+  final bs = mosaicBlockSize(img.width, img.height).toDouble();
+  final gw = math.max(1, (rect.width / bs).round());
+  final gh = math.max(1, (rect.height / bs).round());
+  final grid = ui.Size(gw.toDouble(), gh.toDouble());
+  final small = newCanvasSync(gw, gh, (sc) {
+    sc.drawImageRect(img, rect, ui.Offset.zero & grid,
+        ui.Paint()..filterQuality = ui.FilterQuality.medium);
+  });
+  c.drawImageRect(small, ui.Offset.zero & grid, rect,
+      ui.Paint()..filterQuality = ui.FilterQuality.none);
 }
