@@ -15,10 +15,15 @@ import '../pipeline/source.dart';
 
 class DecodedImage {
   DecodedImage(this.cacheKey, this.image, this.width, this.height,
-      {this.fromCache = false});
+      {this.fromCache = false, this.srcWidth, this.srcHeight});
   final String cacheKey;
   final ui.Image image;
   final int width, height;
+
+  /// 原图固有尺寸（可解析时提供）：缩放百分比语义与条目元数据以此为准，
+  /// 与 [width]/[height]（实际位图尺寸，降采样后更小）区分。
+  final int? srcWidth, srcHeight;
+
   final bool fromCache;
 
   int get bytes => width * height * 4;
@@ -62,7 +67,12 @@ class ImageManager {
     }
   }
 
-  /// 全量解码（target=0 原尺寸）或降采样解码（target>0，含缩略图磁盘缓存）。
+  /// 显示解码（设计书 3.3）：target=0 全量解码；target>0 等比缩到宽 [target]。
+  ///
+  /// **只缩不放大**：原图宽不大于 [target] 时按原尺寸解码并跳过缩略图缓存
+  /// （杜绝解码器 targetWidth 把小图强制拉伸——曾致元数据显示 2024×1518、
+  /// 「100% 实际大小」实为放大图，2026-09-09 用户反馈）。
+  /// [DecodedImage.srcWidth]/[srcHeight] 携带原图固有尺寸。
   ///
   /// [autoPin] 解码/命中后立即钉住：显示方持有期间禁止淘汰释放。
   /// 必须与 unpin 成对；消除「decode 返回到调用方手动 pin 之间」的竞态淘汰窗口。
@@ -77,27 +87,28 @@ class ImageManager {
 
     DecodedImage dec;
     if (target > 0) {
-      final cached = await _thumbFromDisk(path, mtimeMs, target);
-      if (cached != null) {
-        dec = DecodedImage(key, cached, cached.width, cached.height,
-            fromCache: true);
+      final src = await _intrinsicSize(path);
+      final srcW = src?.$1;
+      final srcH = src?.$2;
+      if (srcW != null && srcW <= target) {
+        // 原图不大于目标：按原尺寸解码，跳过缩略图缓存（避免放大图入缓存）
+        final img = await _decodeCodec(path, null);
+        dec = DecodedImage(key, img, img.width, img.height,
+            srcWidth: srcW, srcHeight: srcH);
       } else {
-        final bytes = await File(path).readAsBytes();
-        // 只约束宽度：同时给 targetWidth/Height 会强制精确尺寸（非等比变形）
-        final codec = await ui.instantiateImageCodec(
-          bytes,
-          targetWidth: target,
-        );
-        final frame = await codec.getNextFrame();
-        final img = frame.image;
-        dec = DecodedImage(key, img, img.width, img.height);
-        await _thumbToDisk(path, mtimeMs, target, img);
+        final cached = await _thumbFromDisk(path, mtimeMs, target);
+        if (cached != null) {
+          dec = DecodedImage(key, cached, cached.width, cached.height,
+              fromCache: true, srcWidth: srcW, srcHeight: srcH);
+        } else {
+          final img = await _decodeCodec(path, target);
+          dec = DecodedImage(key, img, img.width, img.height,
+              srcWidth: srcW, srcHeight: srcH);
+          await _thumbToDisk(path, mtimeMs, target, img);
+        }
       }
     } else {
-      final bytes = await File(path).readAsBytes();
-      final codec = await ui.instantiateImageCodec(bytes);
-      final frame = await codec.getNextFrame();
-      final img = frame.image;
+      final img = await _decodeCodec(path, null);
       dec = DecodedImage(key, img, img.width, img.height);
     }
 
@@ -105,6 +116,55 @@ class ImageManager {
     if (autoPin) pin(key);
     _insert(dec);
     return dec;
+  }
+
+  /// 原图固有尺寸（只解析文件头，不整图解码）；失败返回 null。
+  Future<(int, int)?> _intrinsicSize(String path) async {
+    try {
+      final buffer = await ui.ImmutableBuffer.fromFilePath(path);
+      final descriptor = await ui.ImageDescriptor.encoded(buffer);
+      final size = (descriptor.width, descriptor.height);
+      descriptor.dispose();
+      buffer.dispose();
+      return size;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 解码单帧。[targetWidth] 非空时等比缩到该宽（调用方保证小于原图宽，
+  /// 此处不放大）。走 ImageDescriptor 管线；异常时退回 instantiateImageCodec
+  /// 直解（动图等 descriptor 支持不稳场景的兜底，行为同旧版）。
+  ///
+  /// 注意：descriptor/buffer 必须在 getNextFrame 完成后再 dispose——
+  /// codec 取帧仍引用其原生数据，提前释放会在真实引擎上挂死
+  ///（flutter_test 软件引擎不触发，集成测试抓到，2026-09-09）。
+  Future<ui.Image> _decodeCodec(String path, int? targetWidth) async {
+    try {
+      final buffer = await ui.ImmutableBuffer.fromFilePath(path);
+      final descriptor = await ui.ImageDescriptor.encoded(buffer);
+      final downscale =
+          targetWidth != null && targetWidth < descriptor.width;
+      final codec = await descriptor.instantiateCodec(
+        targetWidth: downscale ? targetWidth : null,
+      );
+      final intrinsic = (descriptor.width, descriptor.height);
+      final frame = await codec.getNextFrame();
+      descriptor.dispose();
+      buffer.dispose();
+      if (downscale && frame.image.width >= intrinsic.$1) {
+        frame.image.dispose();
+        throw StateError('downscale did not apply');
+      }
+      return frame.image;
+    } catch (_) {
+      final bytes = await File(path).readAsBytes();
+      final codec = targetWidth == null
+          ? await ui.instantiateImageCodec(bytes)
+          : await ui.instantiateImageCodec(bytes, targetWidth: targetWidth);
+      final frame = await codec.getNextFrame();
+      return frame.image;
+    }
   }
 
   void _insert(DecodedImage dec) {

@@ -90,7 +90,37 @@ void main() {
     final mgr2 = ImageManager(thumbCacheDir: thumbs);
     final d2 = await mgr2.decode(f.path, 7, target: 320);
     expect(d2.fromCache, isTrue, reason: '重启后应命中磁盘缩略图缓存');
+    expect(d2.srcWidth, 800, reason: '磁盘缓存命中也应携带原图固有尺寸');
+    expect(d2.srcHeight, 600);
     mgr2.dispose();
+  });
+
+  test('小图不放大：target 大于原图宽时按原尺寸解码并携带源尺寸', () async {
+    final f = await _writePng(tmp, 'small.png', 40, 20, 0xFF00FF00);
+    final mgr = ImageManager(thumbCacheDir: thumbs);
+    final d = await mgr.decode(f.path, 11, target: 512);
+    expect(d.width, 40, reason: '解码器不得把小图拉伸到 target');
+    expect(d.height, 20);
+    expect(d.srcWidth, 40);
+    expect(d.srcHeight, 20);
+    // 小图跳过缩略图缓存（避免放大图入缓存）
+    final pngs = await thumbs.exists()
+        ? await thumbs.list().where((e) => e is File).length
+        : 0;
+    expect(pngs, 0, reason: '小图不应产生缩略图缓存文件');
+    mgr.dispose();
+  });
+
+  test('大图降采样：位图缩到目标宽，源尺寸单独保留', () async {
+    final f = await _writePng(tmp, 'big.png', 800, 600, 0xFF223344);
+    final mgr = ImageManager(thumbCacheDir: thumbs);
+    final d = await mgr.decode(f.path, 12, target: 200);
+    expect(d.width, 200);
+    expect(d.height, 150, reason: '等比缩放：800×600 → 200×150');
+    expect(d.srcWidth, 800);
+    expect(d.srcHeight, 600);
+    expect(d.bytes, 200 * 150 * 4, reason: '字节预算按实际位图计');
+    mgr.dispose();
   });
 
   test('clearThumbCache 清空并返回数量', () async {

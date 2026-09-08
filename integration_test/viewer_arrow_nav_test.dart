@@ -1,11 +1,8 @@
-/// 回归：浏览视图 ←/→ 普通翻页（非边界）在真实 Windows 引擎下可用。
-/// 运行: flutter test integration_test/viewer_arrow_nav_test.dart -d windows
+// 回归：浏览视图 ←/→ 普通翻页（非边界）在真实 Windows 引擎下可用。
+// 运行: flutter test integration_test/viewer_arrow_nav_test.dart -d windows
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-import 'dart:ui' as ui;
 
-import 'package:agent_image_viewer/app_state.dart';
 import 'package:agent_image_viewer/main.dart' as app;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -24,6 +21,7 @@ void main() {
   binding.framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.fullyLive;
 
   testWidgets('←/→ 在文件夹内前后翻页', (tester) async {
+    log('body start');
     final errors = <FlutterErrorDetails>[];
     FlutterError.onError = (d) => errors.add(d);
 
@@ -36,10 +34,13 @@ void main() {
     for (final n in ['img1.png', 'img2.png', 'img3.png']) {
       await File('$dir${Platform.pathSeparator}$n').writeAsBytes(kPng1x1);
     }
+    log('fixture ready');
 
     await app.appMain(['$dir${Platform.pathSeparator}img1.png']);
+    log('appMain done');
     await tester.pump(const Duration(seconds: 2));
     await tester.pump(const Duration(seconds: 1));
+    log('pumped');
 
     // 初始：img1
     expect(find.textContaining('img1.png'), findsWidgets,

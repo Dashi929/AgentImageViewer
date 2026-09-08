@@ -8,8 +8,8 @@ library;
 /// 磁盘缩略图缓存键：`路径哈希 + mtime + 目标尺寸`（设计书 3.3 节）。
 String thumbCacheKey(String path, int mtimeMs, int targetSize) {
   final h = path.hashCode.toUnsigned(32).toRadixString(16);
-  // v2：target 语义改为「等比缩放宽度」，旧版（强制变形 320x320）缓存自动失效
-  return 'v2_t_${h}_$mtimeMs _$targetSize'.replaceAll(' ', '_');
+  // v3：解码改「只缩不放大」，v2 缓存里小图的缩略图是解码器放大产物，整体作废
+  return 'v3_t_${h}_$mtimeMs _$targetSize'.replaceAll(' ', '_');
 }
 
 /// 可见区域的 tile 规划：把整图切成 size×size 的块，

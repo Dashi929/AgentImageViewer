@@ -155,13 +155,17 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
         .decode(e.path, e.mtimeMs, target: previewTarget, autoPin: true);
     if (_entry.path != e.path) return;
     _applyDecoded(preview);
-    _view.resetForImage(preview.width, preview.height, _view.viewportW, _view.viewportH);
+    // 缩放语义锚定原图固有尺寸：fit % 与「100% 实际大小」均以原图为基准，
+    // 位图（可能被降采样）只是呈现代理
+    final imgW = preview.srcWidth ?? preview.width;
+    final imgH = preview.srcHeight ?? preview.height;
+    _view.resetForImage(imgW, imgH, _view.viewportW, _view.viewportH);
     setState(() {});
 
     // 大图分级解码（设计书 3.3）：fit 级立即呈现，放大时按需升级，
     // 避免 1 亿像素级原图整图解码的内存峰值。
     if (_entry.path == e.path) {
-      _view.resetForImage(preview.width, preview.height, _view.viewportW, _view.viewportH);
+      _view.resetForImage(imgW, imgH, _view.viewportW, _view.viewportH);
       setState(() {});
       unawaited(_maybeAnimate(e));
       _prefetchNeighbors();
@@ -180,8 +184,11 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     final dpr = View.of(context).devicePixelRatio;
     final fitTarget = (_view.viewportW * dpr).clamp(320, 2048).toInt();
     final upper = math.min(_view.imageWidth, 4096);
+    // 下限不能超过上限（小图时 fitTarget 可能大于原图宽，旧写法 clamp 会
+    // 把 target 抬到 fitTarget 造成放大重解码），一律封顶在原图宽内。
+    final lo = math.min(fitTarget, upper);
     final desired =
-        (_view.imageWidth * _view.scale * dpr).round().clamp(fitTarget, upper).toInt();
+        (_view.imageWidth * _view.scale * dpr).round().clamp(lo, upper).toInt();
     if (desired <= img.width * 3 ~/ 2) return; // 提升不足 50% 不值得重解码
     _upgrading = true;
     try {
@@ -441,9 +448,12 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     _pinnedKey = d.cacheKey;
     _displayImage = d.image;
     final e = _entry;
-    if (e.width != d.width || e.height != d.height) {
-      e.width = d.width;
-      e.height = d.height;
+    // 条目元数据以原图固有尺寸为准（位图可能是降采样代理）
+    final w = d.srcWidth ?? d.width;
+    final h = d.srcHeight ?? d.height;
+    if (e.width != w || e.height != h) {
+      e.width = w;
+      e.height = h;
     }
   }
 
