@@ -18,6 +18,7 @@ import '../../core/image/image_manager.dart';
 import '../../core/scanner.dart';
 import '../../core/viewer/slideshow.dart';
 import '../../core/viewer/viewer_state.dart';
+import '../ai/ai_panel.dart';
 import '../shortcuts_sheet.dart';
 import '../theme.dart';
 
@@ -72,13 +73,16 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
   // 双循环（表现即 2 倍速）。
   int _animGen = 0;
 
-  // 幻灯片（设计书 2.2：间隔 1/3/5/10s 可选，随机与循环）
+  // 幻灯片（设计书 2.2：间隔用户自由输入，秒可小数；随机与循环）
   bool _slideshow = false;
-  int _slideIntervalSec = 3;
+  double _slideIntervalSec = 3.0;
   bool _slideRandom = false;
   bool _slideLoop = true;
   Timer? _slideTimer;
   final math.Random _slideRng = math.Random();
+
+  // AI 助手侧板（Ctrl+K / 底栏按钮切换；真值由全局 notifier 驱动）
+  bool _aiOpen = false;
 
   // 文件夹边界导航：第一按提示、短窗内再按一次跳相邻文件夹。
   // 300ms 下限吸收双击/连按误触；3s 上限之外视为新的第一按。
@@ -137,8 +141,18 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     _openCurrent();
   }
 
+  /// dispose 时不可再做祖先查找（deactivated 后不安全）：
+  /// 在 didChangeDependencies 缓存 AppState 引用。
+  AppState? _appRef;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _appRef = AppStateScope.of(context, listen: false);
+  }
+
   ImageEntry get _entry => widget.list[_nav.index];
-  AppState get _app => AppStateScope.of(context);
+  AppState get _app => _appRef ?? AppStateScope.of(context, listen: false);
 
   Future<void> _openCurrent() async {
     final e = _entry;
@@ -286,36 +300,6 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
-  /// Del：从本次浏览列表移除当前图（虚拟操作，本地文件保留）。
-  Future<void> _deleteCurrent() async {
-    final path = _entry.path;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('从浏览列表移除'),
-        content: const Text('仅从本次浏览列表移除，不删除本地文件。'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('移除')),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-    _showOsd('已从浏览列表移除（本地文件保留）');
-    // 从当前列表移除并接续显示；若空则回主页
-    widget.list.removeWhere((e) => e.path == path);
-    if (widget.list.isEmpty) {
-      NavigatorStateEx.closeViewer();
-    } else {
-      if (_nav.index >= widget.list.length) _nav.last();
-      _openCurrent();
-    }
-  }
-
   // ---------- 幻灯片（设计书 2.2 / 表 5-3） ----------
 
   void _toggleSlideshow() {
@@ -344,7 +328,8 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
   void _scheduleNextSlide() {
     _slideTimer?.cancel();
     if (!_slideshow) return;
-    _slideTimer = Timer(Duration(seconds: _slideIntervalSec), _advanceSlide);
+    _slideTimer = Timer(
+        Duration(milliseconds: (_slideIntervalSec * 1000).round()), _advanceSlide);
   }
 
   void _advanceSlide() {
@@ -366,71 +351,95 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     _scheduleNextSlide();
   }
 
-  /// 幻灯片设置弹层：间隔 1/3/5/10 秒、随机、循环。
-  Future<void> _showSlideshowSettings() async {
+  /// 幻灯片弹窗（启停 + 设置合一）：间隔自由输入（秒，可小数）、随机、循环。
+  /// pop 值：true=应用设置（未播放则开始）；false=停止；null=取消。
+  Future<void> _showSlideshowDialog() async {
     _wakeControls();
-    await showMenu<String>(
+    final intervalCtrl =
+        TextEditingController(text: _formatInterval(_slideIntervalSec));
+    var random = _slideRandom;
+    var loop = _slideLoop;
+    double? interval = _slideIntervalSec;
+
+    final apply = await showDialog<bool>(
       context: context,
-      position: const RelativeRect.fromLTRB(200, 400, 200, 200),
-      items: [
-        for (final sec in slideshowIntervals)
-          PopupMenuItem(
-            value: 'i$sec',
-            child: Row(
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final v = interval;
+          final valid = v != null && v >= 0.1 && v <= 3600;
+          return AlertDialog(
+            title: const Text('幻灯片'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (sec == _slideIntervalSec)
-                  const Icon(Icons.check, size: 16, color: AppColors.accent)
-                else
-                  const SizedBox(width: 16),
-                const SizedBox(width: 6),
-                Text('$sec 秒间隔'),
+                TextField(
+                  controller: intervalCtrl,
+                  autofocus: true,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d*')),
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: '间隔（秒，可小数）',
+                    hintText: '例如 3 或 0.5',
+                  ),
+                  onChanged: (v) {
+                    interval = double.tryParse(v.trim());
+                    setDialogState(() {});
+                  },
+                ),
+                const SizedBox(height: 4),
+                SwitchListTile(
+                  value: random,
+                  onChanged: (v) => setDialogState(() => random = v),
+                  title: const Text('随机顺序', style: TextStyle(fontSize: 14)),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
+                SwitchListTile(
+                  value: loop,
+                  onChanged: (v) => setDialogState(() => loop = v),
+                  title: const Text('循环播放', style: TextStyle(fontSize: 14)),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                ),
               ],
             ),
-          ),
-        const PopupMenuDivider(),
-        PopupMenuItem(
-          value: 'random',
-          child: Row(
-            children: [
-              Icon(
-                _slideRandom ? Icons.check_box : Icons.check_box_outline_blank,
-                size: 16,
-                color: _slideRandom ? AppColors.accent : AppColors.textSecondary,
+            actions: [
+              if (_slideshow)
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('停止'),
+                ),
+              FilledButton(
+                onPressed: valid ? () => Navigator.pop(context, true) : null,
+                child: Text(_slideshow ? '应用' : '开始幻灯片'),
               ),
-              const SizedBox(width: 6),
-              const Text('随机顺序'),
             ],
-          ),
-        ),
-        PopupMenuItem(
-          value: 'loop',
-          child: Row(
-            children: [
-              Icon(
-                _slideLoop ? Icons.check_box : Icons.check_box_outline_blank,
-                size: 16,
-                color: _slideLoop ? AppColors.accent : AppColors.textSecondary,
-              ),
-              const SizedBox(width: 6),
-              const Text('循环播放'),
-            ],
-          ),
-        ),
-      ],
-    ).then((value) {
-      if (value == null) return;
+          );
+        },
+      ),
+    );
+    if (!mounted) return;
+    if (apply == null) return; // 取消
+    _slideRandom = random;
+    _slideLoop = loop;
+    _slideIntervalSec = interval!;
+    if (apply) {
       setState(() {
-        if (value.startsWith('i')) {
-          _slideIntervalSec = int.parse(value.substring(1));
-        } else if (value == 'random') {
-          _slideRandom = !_slideRandom;
-        } else if (value == 'loop') {
-          _slideLoop = !_slideLoop;
-        }
+        if (!_slideshow) _showOsd('幻灯片开始');
+        _slideshow = true;
       });
-      if (_slideshow) _scheduleNextSlide(); // 间隔变更立即生效
-    });
+      _scheduleNextSlide(); // 播放中改间隔立即生效
+    } else {
+      _stopSlideshow();
+    }
   }
+
+  String _formatInterval(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : '$v';
 
   void _toggleAnimPause() {
     if (_animCodec == null) return;
@@ -660,13 +669,19 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     _animCodec?.dispose();
     _displayImage?.dispose(); // 动图帧自管，静态图由 ImageManager 统一释放
     final key = _pinnedKey;
-    if (key != null) _app.images.unpin(key);
+    final app = _appRef;
+    if (key != null && app != null) app.images.unpin(key);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return CallbackShortcuts(
+    // AI 侧板开关由全局 notifier 驱动（Ctrl+K 与底栏按钮同一真源）
+    return ValueListenableBuilder<bool>(
+      valueListenable: NavigatorStateEx.viewerAiPanel,
+      builder: (context, aiOpen, _) {
+        _aiOpen = aiOpen;
+        return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.arrowLeft): () => _navigate(false),
         const SingleActivator(LogicalKeyboardKey.arrowRight): () => _navigate(true),
@@ -692,7 +707,11 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
         },
         const SingleActivator(LogicalKeyboardKey.keyF): _toggleFullscreen,
         const SingleActivator(LogicalKeyboardKey.escape): () {
-          if (_fullscreen) {
+          if (_aiOpen) {
+            NavigatorStateEx.viewerAiPanel.value = false;
+          } else if (_infoOpen) {
+            setState(() => _infoOpen = false);
+          } else if (_fullscreen) {
             _toggleFullscreen();
           } else {
             NavigatorStateEx.closeViewer();
@@ -710,7 +729,6 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
             () => showShortcutSheet(context),
         const SingleActivator(LogicalKeyboardKey.keyE, control: true): () =>
             NavigatorStateEx.editor.value = _entry,
-        const SingleActivator(LogicalKeyboardKey.delete): _deleteCurrent,
         const SingleActivator(LogicalKeyboardKey.f2): _renameCurrent,
       },
       child: Focus(
@@ -720,8 +738,12 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
           backgroundColor: AppColors.mainBg,
           body: LayoutBuilder(
             builder: (context, c) {
+              // 侧板宽度在小屏上按视口收窄，避免 Row 溢出
+              final aiW = math.min(380.0, c.maxWidth * 0.85);
+              final infoW = math.min(280.0, c.maxWidth * 0.7);
               _view.setViewport(
-                  c.maxWidth - (_infoOpen ? 280 : 0), c.maxHeight);
+                  c.maxWidth - (_aiOpen ? aiW : 0) - (_infoOpen ? infoW : 0),
+                  c.maxHeight);
               return MouseRegion(
                 onHover: (_) => _wakeControls(),
                 child: Row(
@@ -735,7 +757,8 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
                         ],
                       ),
                     ),
-                    if (_infoOpen) _infoPanel(),
+                    if (_aiOpen) _aiPanel(aiW),
+                    if (_infoOpen) _infoPanel(infoW),
                   ],
                 ),
               );
@@ -743,6 +766,8 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
           ),
         ),
       ),
+      );
+    },
     );
   }
 
@@ -922,16 +947,23 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
           }),
           const VerticalDivider(width: 12, indent: 12, endIndent: 12),
           _barBtn(
-            _slideshow ? Icons.pause_circle_outline : Icons.slideshow,
-            _slideshow ? '暂停幻灯片 (Space)' : '幻灯片 (Space)',
-            _toggleSlideshow,
+            Icons.slideshow,
+            _slideshow ? '幻灯片播放中 · 间隔/随机/循环/停止' : '幻灯片（间隔自行输入）',
+            _showSlideshowDialog,
+            active: _slideshow,
           ),
-          _barBtn(Icons.tune, '幻灯片设置', _showSlideshowSettings),
           _barBtn(Icons.edit_outlined, '编辑 (Ctrl+E)', () {
             NavigatorStateEx.editor.value = _entry;
           }),
           _barBtn(Icons.info_outline, '信息 (I)', _toggleInfo),
-          _barBtn(Icons.delete_outline, '从列表移除 (Del)', _deleteCurrent),
+          _barBtn(
+            Icons.auto_awesome,
+            'AI 助手 (Ctrl+K)',
+            () => NavigatorStateEx.viewerAiPanel.value =
+                !NavigatorStateEx.viewerAiPanel.value,
+            active: _aiOpen,
+            iconColor: AppColors.aiAccent,
+          ),
           const VerticalDivider(width: 12, indent: 12, endIndent: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -944,13 +976,17 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     );
   }
 
-  Widget _barBtn(IconData icon, String tip, VoidCallback onTap) {
+  Widget _barBtn(IconData icon, String tip, VoidCallback onTap,
+      {bool active = false, Color? iconColor}) {
     return IconButton(
       onPressed: () {
         _wakeControls();
         onTap();
       },
-      icon: Icon(icon, size: 20, color: AppColors.textPrimary),
+      icon: Icon(icon, size: 20,
+          color: active
+              ? AppColors.accent
+              : (iconColor ?? AppColors.textPrimary)),
       tooltip: tip,
     );
   }
@@ -1010,7 +1046,17 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
 
   // ---------- 信息面板 ----------
 
-  Widget _infoPanel() {
+  // ---------- AI 助手侧板（设计书 4.3.2 浏览视图 AI 入口） ----------
+
+  Widget _aiPanel(double width) {
+    return Container(
+      width: width,
+      color: AppColors.panel,
+      child: const AiPanel(),
+    );
+  }
+
+  Widget _infoPanel([double width = 280]) {
     final e = _entry;
     String sizeText = '-';
     final bytes = e.sizeBytes;
@@ -1038,7 +1084,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
         );
 
     return Container(
-      width: 280,
+      width: width,
       color: AppColors.panel,
       padding: const EdgeInsets.all(16),
       child: Column(

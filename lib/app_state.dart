@@ -152,11 +152,13 @@ class NavigatorStateEx {
 
   static void closeViewer() {
     viewer.value = null;
+    viewerAiPanel.value = false;
     currentTab.value = NavTab.home;
   }
 
   /// 编辑视图当前条目；null 表示未在编辑。
   static final ValueNotifier<ImageEntry?> editor = ValueNotifier(null);
 
-
+  /// 浏览视图内的 AI 助手侧板开关（Ctrl+K / 底栏按钮切换）。
+  static final ValueNotifier<bool> viewerAiPanel = ValueNotifier(false);
 }

@@ -42,10 +42,6 @@ void main() {
           nextSlideIndex(current: 0, count: 1, random: false, loop: false),
           isNull);
     });
-
-    test('间隔选项符合设计书 1/3/5/10 秒', () {
-      expect(slideshowIntervals, [1, 3, 5, 10]);
-    });
   });
 
   group('自由旋转（设计书 表 2-3）', () {

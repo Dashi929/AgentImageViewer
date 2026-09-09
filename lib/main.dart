@@ -126,9 +126,15 @@ class _AgentImageViewerAppState extends State<AgentImageViewerApp>
         theme: AppTheme.dark(),
         home: CallbackShortcuts(
           bindings: {
-            // 全局：Ctrl+K 聚焦 AI 面板、? 呼出快捷键速查（设计书 表 5-3）
-            const SingleActivator(LogicalKeyboardKey.keyK, control: true):
-                () => NavigatorStateEx.currentTab.value = NavTab.ai,
+            // 全局：Ctrl+K 唤出 AI（浏览视图开侧板，其余切 AI 标签）、? 速查
+            const SingleActivator(LogicalKeyboardKey.keyK, control: true): () {
+              if (NavigatorStateEx.viewer.value != null) {
+                NavigatorStateEx.viewerAiPanel.value =
+                    !NavigatorStateEx.viewerAiPanel.value;
+              } else {
+                NavigatorStateEx.currentTab.value = NavTab.ai;
+              }
+            },
             const SingleActivator(LogicalKeyboardKey.slash, shift: true):
                 () => showShortcutSheet(navigatorKey.currentContext!),
           },
