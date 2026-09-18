@@ -2,6 +2,12 @@
 
 跨平台 AI 图片浏览器：快如原生的看图器、够用的轻量编辑器、会自己动手的 AI 图片助手。四端（Windows / Linux / Android / iOS）共用一份 Flutter 代码，图像处理统一走 **Filter Pipeline** 架构。
 
+## 界面预览
+
+| 看图（即开即看 · 连续浏览 · 底部胶片条） |
+| --- |
+| ![看图器](docs/screenshots/viewer.jpg) |
+
 - 设计依据：《AgentImageViewer-设计文档-完整版v2.docx》
 - 开发流程：[开发流程.md](开发流程.md)（S0 奠基 → S1 浏览内核 → S2 编辑/图库 → S3 v0.1 发布 → S4 AI Agent → S5 桌面双端 → S6 移动端 → S7 全平台）
 - 参考：AgentVideoPlayer 系列同源工程
