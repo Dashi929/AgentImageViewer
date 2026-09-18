@@ -4,9 +4,9 @@
 
 ## 界面预览
 
-| 看图（即开即看 · 沉浸式浏览 · 自动隐藏挂件） |
-| --- |
-| ![看图器](docs/screenshots/viewer.jpg) |
+| 浏览（打开图片 / 文件夹，即开即看） | 看图（缩放 · 幻灯片 · 编辑 · AI 入口 · 底部胶片条） |
+| --- | --- |
+| ![浏览](docs/screenshots/home.jpg) | ![看图器](docs/screenshots/viewer.jpg) |
 
 - 设计依据：《AgentImageViewer-设计文档-完整版v2.docx》
 - 开发流程：[开发流程.md](开发流程.md)（S0 奠基 → S1 浏览内核 → S2 编辑/图库 → S3 v0.1 发布 → S4 AI Agent → S5 桌面双端 → S6 移动端 → S7 全平台）
