@@ -19,6 +19,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   flutter::DartProject project(L"data");
 
+  // Impeller on Windows renders through ANGLE (OpenGLES→D3D11); on some AMD
+  // drivers the context setup aborts inside flutter_windows.dll (fastfail
+  // c0000409, 2026-10-29 crash dumps). Skia+ANGLE is the long-stable path,
+  // so disable Impeller on Windows.
+  project.set_impeller_switch(flutter::ImpellerSwitch::Disabled);
+
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
 
