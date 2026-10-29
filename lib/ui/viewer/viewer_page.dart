@@ -1,4 +1,5 @@
-/// 浏览视图（设计书 4.3.2）：全窗沉浸式，悬浮控件 2 秒自动淡出。
+/// 浏览视图（设计书 4.3.2）：全窗沉浸式，悬浮控件 2 秒自动淡出；
+/// 缩略图条例外——由单击图片切换显示/隐藏，不参与自动淡出。
 library;
 
 import 'dart:async';
@@ -58,6 +59,12 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
 
   bool _controlsVisible = true;
   Timer? _hideTimer;
+
+  // 缩略图条独立于底栏自动隐藏：单击图片切换显示/隐藏。
+  bool _stripVisible = true;
+  Timer? _stripToggleTimer;
+  bool _tapCandidate = false; // 本次按下是否可能构成单击（主键且未拖拽）
+  Offset _downPos = Offset.zero;
 
   // 动图播放（GIF/WebP）：自动播放，空格暂停取帧（设计书 2.2）。
   // 暂停分两源：用户手动（空格）与退后台自动；任一为真即停取帧，
@@ -614,6 +621,8 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
 
   /// 自实现双击：适应窗口 ↔ 100% 实际像素（设计书 表 5-1）。
   /// 不用 GestureDetector.onDoubleTap——它会与 scale 手势产生 arena 竞争而失效。
+  /// 单击：切换缩略图条显示/隐藏。延迟到双击窗口结束后生效，
+  /// 避免双击的第一击把缩略图条先切掉一次。
   void _handleTapUp(PointerUpEvent e) {
     final now = DateTime.now();
     final pos = e.localPosition;
@@ -623,15 +632,23 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
         (pos - _lastTapPos!).distance < 48;
     _lastTapAt = isDouble ? null : now;
     _lastTapPos = pos;
-    if (!isDouble) return;
-    if (_view.isAtFit) {
-      _view.actualSize();
-      _showOsd('100%');
-    } else {
-      _view.fitWindow();
-      _showOsd('适应窗口');
+    _stripToggleTimer?.cancel();
+    if (isDouble) {
+      if (_view.isAtFit) {
+        _view.actualSize();
+        _showOsd('100%');
+      } else {
+        _view.fitWindow();
+        _showOsd('适应窗口');
+      }
+      setState(() {});
+      return;
     }
-    setState(() {});
+    // 拖拽结束、非主键（侧键）不构成单击
+    if (!_tapCandidate || (pos - _downPos).distance > 10) return;
+    _stripToggleTimer = Timer(const Duration(milliseconds: 320), () {
+      if (mounted) setState(() => _stripVisible = !_stripVisible);
+    });
   }
 
   void _wakeControls() {
@@ -664,6 +681,7 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
     _focusNode.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _hideTimer?.cancel();
+    _stripToggleTimer?.cancel();
     _slideTimer?.cancel();
     _animTimer?.cancel();
     _animCodec?.dispose();
@@ -785,6 +803,8 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
         // 鼠标侧键（设计书 表 5-1：前进/后退 → 下一张/上一张）
         if (d.buttons == 8) _navigate(false); // 后退侧键
         if (d.buttons == 16) _navigate(true); // 前进侧键
+        _tapCandidate = d.buttons == kPrimaryButton;
+        _downPos = d.localPosition;
         _wakeControls(); // 触屏：触摸即唤醒控件（设计书 4.2）
       },
       onPointerMove: (_) => _wakeControls(),
@@ -1000,11 +1020,12 @@ class _ViewerPageState extends State<ViewerPage> with WidgetsBindingObserver {
       right: 0,
       bottom: 84,
       child: AnimatedOpacity(
-        opacity: _controlsVisible ? 1 : 0,
+        key: const ValueKey('thumbStrip'), // 集成测试断言条显示状态用
+        opacity: _stripVisible ? 1 : 0,
         duration: AppTheme.motionDuration,
         curve: AppTheme.curve,
         child: IgnorePointer(
-          ignoring: !_controlsVisible,
+          ignoring: !_stripVisible,
           child: SizedBox(
             height: 76,
             child: ListView.builder(
